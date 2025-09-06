@@ -14,6 +14,7 @@ using ExileCore2.PoEMemory.Components;
 using ExileCore2.PoEMemory.Elements;
 using ExileCore2.PoEMemory.Elements.InventoryElements;
 using ExileCore2.PoEMemory.MemoryObjects;
+using GameOffsets2.Native;
 using ImGuiNET;
 using RitualHelper.Utils;
 
@@ -29,6 +30,8 @@ namespace RitualHelper
         private readonly ConcurrentDictionary<RectangleF, bool?> _mouseStateForRect = new();
         private PoE2ScoutApiService? _apiService;
         private DateTime _lastApiUpdate = DateTime.MinValue;
+        private Vector2i? _originalMousePosition;
+        private bool _isApiFetching = false;
 
         private bool MoveCancellationRequested => 
             Settings.CancelWithRightClick && (Control.MouseButtons & MouseButtons.Right) != 0;
@@ -65,9 +68,12 @@ namespace RitualHelper
             // api integration controls
             if (Settings.EnableApiIntegration.Value)
             {
-                if (ImGui.Button("Update from API Now"))
+                if (ImGui.Button(_isApiFetching ? "Updating..." : "Update from API Now"))
                 {
-                    _ = Task.Run(UpdateDeferListFromApi);
+                    if (!_isApiFetching)
+                    {
+                        _ = Task.Run(UpdateDeferListFromApiSafe);
+                    }
                 }
                 
                 ImGui.SameLine();
@@ -90,10 +96,10 @@ namespace RitualHelper
         {
             if (!Settings.Enable) return;
 
-            // check if we need to update from API
-            if (Settings.EnableApiIntegration.Value && ShouldUpdateFromApi())
+            // check if we need to update from API (but avoid concurrent fetches)
+            if (Settings.EnableApiIntegration.Value && ShouldUpdateFromApi() && !_isApiFetching)
             {
-                _ = Task.Run(UpdateDeferListFromApi);
+                _ = Task.Run(UpdateDeferListFromApiSafe);
             }
 
             var ritualPanel = GameController.IngameState.IngameUi.RitualWindow;
@@ -268,6 +274,11 @@ namespace RitualHelper
             {
                 LogError($"error during defer process: {ex.Message}");
             }
+            finally
+            {
+                // restore mouse to original position after all work is done
+                await RestoreMousePosition();
+            }
         }
 
         private async Task DeferItemsByPriority()
@@ -317,7 +328,11 @@ namespace RitualHelper
             // defer items in priority order
             foreach (var (element, priority, isExisting) in sortedItems)
             {
-                if (MoveCancellationRequested) break;
+                if (MoveCancellationRequested) 
+                {
+                    LogMessage("defer operation cancelled by user (right-click)");
+                    break;
+                }
 
                 try
                 {
@@ -449,6 +464,12 @@ namespace RitualHelper
             
             try
             {
+                // capture original mouse position on first click
+                if (!_originalMousePosition.HasValue)
+                {
+                    _originalMousePosition = Mouse.GetCursorPosition();
+                }
+
                 var position = element.GetClientRectCache.Center + 
                               GameController.Window.GetWindowRectangleTimeCache.TopLeft;
                 await Mouse.MoveMouse(position);
@@ -460,6 +481,42 @@ namespace RitualHelper
             catch (Exception ex)
             {
                 LogError($"error clicking element: {ex.Message}");
+            }
+        }
+
+        private async Task RestoreMousePosition()
+        {
+            if (_originalMousePosition.HasValue)
+            {
+                try
+                {
+                    await Mouse.MoveMouse(_originalMousePosition.Value);
+                    _originalMousePosition = null; // reset for next operation
+                }
+                catch (Exception ex)
+                {
+                    LogError($"error restoring mouse position: {ex.Message}");
+                }
+            }
+        }
+
+        private async Task UpdateDeferListFromApiSafe()
+        {
+            // prevent concurrent API fetches
+            if (_isApiFetching)
+            {
+                LogMessage("API fetch already in progress, skipping duplicate request");
+                return;
+            }
+
+            _isApiFetching = true;
+            try
+            {
+                await UpdateDeferListFromApi();
+            }
+            finally
+            {
+                _isApiFetching = false;
             }
         }
 

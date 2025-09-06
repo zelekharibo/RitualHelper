@@ -21,7 +21,7 @@ namespace RitualHelper
         private List<PoE2ScoutItem> _cachedOmens = new();
         private readonly TimeSpan _cacheExpiry = TimeSpan.FromMinutes(5);
         private DateTime _lastRequestTime = DateTime.MinValue;
-        private readonly TimeSpan _requestDelay = TimeSpan.FromMilliseconds(500);
+        private readonly TimeSpan _requestDelay = TimeSpan.FromSeconds(5);
 
         public PoE2ScoutApiService(string leagueName = "Rise of the Abyssal", 
             Action<string>? logInfo = null, Action<string>? logError = null)
@@ -153,6 +153,7 @@ namespace RitualHelper
                 
                 try
                 {
+                    // always apply rate limit first, even if previous calls failed
                     await ApplyRateLimit();
                     
                     var jsonResponse = await _httpClient.GetStringAsync(url);
@@ -180,6 +181,7 @@ namespace RitualHelper
                 {
                     _logError($"Failed to download page {page} for {category}: {ex.Message}");
                     LogInnerException(ex);
+                    // note: rate limit was already applied, so timing is maintained even on error
                     break;
                 }
                 
@@ -237,13 +239,26 @@ namespace RitualHelper
         
         private async Task ApplyRateLimit()
         {
-            var timeSinceLastRequest = DateTime.Now - _lastRequestTime;
-            if (timeSinceLastRequest < _requestDelay)
+            try
             {
-                var delayNeeded = _requestDelay - timeSinceLastRequest;
-                await Task.Delay(delayNeeded);
+                var timeSinceLastRequest = DateTime.Now - _lastRequestTime;
+                if (timeSinceLastRequest < _requestDelay)
+                {
+                    var delayNeeded = _requestDelay - timeSinceLastRequest;
+                    await Task.Delay(delayNeeded);
+                }
             }
-            _lastRequestTime = DateTime.Now;
+            catch (Exception ex)
+            {
+                _logError($"Error during rate limit delay: {ex.Message}");
+                // still apply minimum delay in case of error
+                await Task.Delay(1000); // 1 second fallback delay
+            }
+            finally
+            {
+                // always update last request time to ensure rate limit is maintained even if operations fail
+                _lastRequestTime = DateTime.Now;
+            }
         }
         
         private PoE2ScoutApiResponse? DeserializeApiResponse(string jsonResponse, int page)
