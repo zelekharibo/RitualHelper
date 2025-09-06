@@ -1,28 +1,44 @@
+using System.Collections.Generic;
 using ExileCore2.Shared.Attributes;
 using ExileCore2.Shared.Interfaces;
 using ExileCore2.Shared.Nodes;
 
-namespace RitualHelper;
-
-public class Settings : ISettings
+namespace RitualHelper
 {
-    public ToggleNode Enable { get; set; } = new(true);
-    
-    [Menu("Action Delay (ms)", "Delay between actions to simulate human behavior")]
-    public RangeNode<int> ActionDelay { get; set; } = new(75, 50, 1000);
+    public class Settings : ISettings
+    {
+        public ToggleNode Enable { get; set; } = new(true);
+        
+        [Menu("Action Delay (ms)", "Delay between actions to simulate human behavior")]
+        public RangeNode<int> ActionDelay { get; set; } = new(75, 50, 1000);
 
-    [Menu("Random Delay (ms)", "Random delay added to action delay (0-100ms)")]
-    public RangeNode<int> RandomDelay { get; set; } = new(25, 0, 100);
+        [Menu("Random Delay (ms)", "Random delay added to action delay (0-100ms)")]
+        public RangeNode<int> RandomDelay { get; set; } = new(25, 0, 100);
 
-    [Menu("Cancel With Right Mouse Button", "Cancel operation on manual right-click")]
-    public ToggleNode CancelWithRightClick { get; set; } = new(true);
+        [Menu("Cancel With Right Mouse Button", "Cancel operation on manual right-click")]
+        public ToggleNode CancelWithRightClick { get; set; } = new(true);
 
-    [Menu("Defer new items", "Defer items that are not already deferred")]
-    public ToggleNode DeferNewItems { get; set; } = new(true);
+        [Menu("Defer existing items", "Defer items that are already deferred")]
+        public ToggleNode DeferExistingItems { get; set; } = new(true);
 
-    [Menu("Defer existing items", "Defer items that are already deferred")]
-    public ToggleNode DeferExistingItems { get; set; } = new(true);
+        [Menu("Enable API Integration", "Auto-populate defer list from PoE2 Scout API")]
+        public ToggleNode EnableApiIntegration { get; set; } = new(false);
 
-    [Menu("New Items Defer List", "Comma separated list to check against base item name")]
-    public TextNode DeferNewItemsList { get; set; } = new("Perfect, Divine Orb, Exalted Orb, Chaos Orb, Omen of, 20, Petition Splinter");
+
+        [Menu("League Name", "Current PoE2 league name for API requests")]
+        public TextNode LeagueName { get; set; } = new("Rise of the Abyssal");
+
+        [Menu("Minimum Exalted Value", "Minimum exalted orb value to include items in defer list")]
+        public RangeNode<float> MinExaltedValue { get; set; } = new(1.0f, 0.01f, 50f);
+
+        [Menu("Auto-Update Interval (minutes)", "How often to fetch new data from API")]
+        public RangeNode<int> ApiUpdateInterval { get; set; } = new(30, 5, 180);
+
+        [Menu("Replace Manual Items", "Replace manually configured items with API data")]
+        public ToggleNode ReplaceManualItems { get; set; } = new(false);
+
+        public string LastApiUpdateTime { get; set; } = string.Empty;
+
+        public DeferGroup DeferGroup { get; set; } = new();
+    }
 }
