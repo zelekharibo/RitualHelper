@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -15,6 +16,7 @@ namespace RitualHelper
         private readonly string _leagueName;
         private readonly Action<string> _logInfo;
         private readonly Action<string> _logError;
+        private readonly bool _useNinjaPricerData;
         
         private DateTime _lastFetch = DateTime.MinValue;
         private List<PoE2ScoutItem> _cachedCurrency = new();
@@ -24,11 +26,12 @@ namespace RitualHelper
         private readonly TimeSpan _requestDelay = TimeSpan.FromSeconds(5);
 
         public PoE2ScoutApiService(string leagueName = "Rise of the Abyssal", 
-            Action<string>? logInfo = null, Action<string>? logError = null)
+            Action<string>? logInfo = null, Action<string>? logError = null, bool useNinjaPricerData = false)
         {
             _logInfo = logInfo ?? (msg => Console.WriteLine($"RitualHelper: {msg}"));
             _logError = logError ?? (msg => Console.WriteLine($"RitualHelper ERROR: {msg}"));
             _leagueName = leagueName;
+            _useNinjaPricerData = useNinjaPricerData;
             
             _httpClient = new HttpClient
             {
@@ -36,7 +39,7 @@ namespace RitualHelper
             };
             
             SetupUserAgent();
-            _logInfo($"API Service initialized for League: {leagueName}");
+            _logInfo($"API Service initialized for League: {leagueName}, UseNinjaPricerData: {useNinjaPricerData}");
         }
         
         private void SetupUserAgent()
@@ -54,13 +57,21 @@ namespace RitualHelper
 
             try
             {
-                _logInfo("Fetching currency data from API...");
-                _cachedCurrency = await LoadPagedDataFromApi("currency") ?? new List<PoE2ScoutItem>();
+                if (_useNinjaPricerData)
+                {
+                    _logInfo("Reading currency data from NinjaPricer cache...");
+                    _cachedCurrency = await LoadDataFromNinjaPricerCache("currency") ?? new List<PoE2ScoutItem>();
+                }
+                else
+                {
+                    _logInfo("Fetching currency data from API...");
+                    _cachedCurrency = await LoadPagedDataFromApi("currency") ?? new List<PoE2ScoutItem>();
+                }
                 
                 if (_cachedCurrency.Any())
                 {
                     _lastFetch = DateTime.Now;
-                    _logInfo($"Successfully fetched {_cachedCurrency.Count} currency items");
+                    _logInfo($"Successfully loaded {_cachedCurrency.Count} currency items");
                 }
                 else
                 {
@@ -71,7 +82,7 @@ namespace RitualHelper
             }
             catch (Exception ex)
             {
-                _logError($"Error fetching currency data: {ex.Message}");
+                _logError($"Error loading currency data: {ex.Message}");
                 LogInnerException(ex);
                 return _cachedCurrency; // return cached data on error
             }
@@ -86,13 +97,21 @@ namespace RitualHelper
 
             try
             {
-                _logInfo("Fetching ritual omen data from API...");
-                _cachedOmens = await LoadPagedDataFromApi("ritual") ?? new List<PoE2ScoutItem>();
+                if (_useNinjaPricerData)
+                {
+                    _logInfo("Reading ritual omen data from NinjaPricer cache...");
+                    _cachedOmens = await LoadDataFromNinjaPricerCache("ritual") ?? new List<PoE2ScoutItem>();
+                }
+                else
+                {
+                    _logInfo("Fetching ritual omen data from API...");
+                    _cachedOmens = await LoadPagedDataFromApi("ritual") ?? new List<PoE2ScoutItem>();
+                }
                 
                 if (_cachedOmens.Any())
                 {
                     _lastFetch = DateTime.Now;
-                    _logInfo($"Successfully fetched {_cachedOmens.Count} ritual omens");
+                    _logInfo($"Successfully loaded {_cachedOmens.Count} ritual omens");
                 }
                 else
                 {
@@ -103,7 +122,7 @@ namespace RitualHelper
             }
             catch (Exception ex)
             {
-                _logError($"Error fetching ritual omen data: {ex.Message}");
+                _logError($"Error loading ritual omen data: {ex.Message}");
                 LogInnerException(ex);
                 return _cachedOmens; // return cached data on error
             }
@@ -136,6 +155,62 @@ namespace RitualHelper
             {
                 _logError($"Error generating defer list: {ex.Message}");
                 return deferItems;
+            }
+        }
+
+        private async Task<List<PoE2ScoutItem>> LoadDataFromNinjaPricerCache(string category)
+        {
+            try
+            {
+                // construct path to NinjaPricer cache file
+                var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                var ninjaPricerPath = Path.Combine(baseDirectory, "Plugins", "Temp", "NinjaPricer", "poescoutdata", _leagueName, $"{category}.json");
+                
+                _logInfo($"Looking for NinjaPricer cache file: {ninjaPricerPath}");
+                
+                if (!File.Exists(ninjaPricerPath))
+                {
+                    _logError($"NinjaPricer cache file not found: {ninjaPricerPath}");
+                    return new List<PoE2ScoutItem>();
+                }
+                
+                // read and parse the JSON file
+                var jsonContent = await File.ReadAllTextAsync(ninjaPricerPath);
+                if (string.IsNullOrEmpty(jsonContent))
+                {
+                    _logError($"NinjaPricer cache file is empty: {ninjaPricerPath}");
+                    return new List<PoE2ScoutItem>();
+                }
+                
+                _logInfo($"Read {jsonContent.Length} characters from NinjaPricer cache file");
+                
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+                
+                // try to parse as either a single response or array of items
+                List<PoE2ScoutItem> items;
+                try
+                {
+                    // first try to parse as API response format
+                    var response = System.Text.Json.JsonSerializer.Deserialize<PoE2ScoutApiResponse>(jsonContent, options);
+                    items = response?.Items ?? new List<PoE2ScoutItem>();
+                }
+                catch
+                {
+                    // if that fails, try to parse as direct array of items
+                    items = System.Text.Json.JsonSerializer.Deserialize<List<PoE2ScoutItem>>(jsonContent, options) ?? new List<PoE2ScoutItem>();
+                }
+                
+                _logInfo($"Successfully parsed {items.Count} items from NinjaPricer cache");
+                return items;
+            }
+            catch (Exception ex)
+            {
+                _logError($"Error reading NinjaPricer cache for {category}: {ex.Message}");
+                LogInnerException(ex);
+                return new List<PoE2ScoutItem>();
             }
         }
 

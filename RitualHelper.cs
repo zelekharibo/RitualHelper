@@ -32,6 +32,8 @@ namespace RitualHelper
         private DateTime _lastApiUpdate = DateTime.MinValue;
         private Vector2i? _originalMousePosition;
         private bool _isApiFetching = false;
+        private string? _lastUsedLeagueName;
+        private bool _lastUsedNinjaPricerData;
 
         private bool MoveCancellationRequested => 
             Settings.CancelWithRightClick && (Control.MouseButtons & MouseButtons.Right) != 0;
@@ -531,12 +533,21 @@ namespace RitualHelper
                 
                 LogMessage($"settings validated - League: {Settings.LeagueName.Value}, MinValue: {Settings.MinExaltedValue.Value}");
                 
-                // initialize API service if needed
-                _apiService ??= new PoE2ScoutApiService(
-                    Settings.LeagueName.Value,
-                    msg => LogMessage($"API: {msg}"),
-                    msg => LogError($"API: {msg}")
-                );
+                // initialize or recreate API service if needed (recreate if settings changed)
+                if (_apiService == null || ShouldRecreateApiService())
+                {
+                    _apiService?.Dispose();
+                    _apiService = new PoE2ScoutApiService(
+                        Settings.LeagueName.Value,
+                        msg => LogMessage($"API: {msg}"),
+                        msg => LogError($"API: {msg}"),
+                        Settings.UseNinjaPricerData.Value
+                    );
+                    
+                    // update last used settings
+                    _lastUsedLeagueName = Settings.LeagueName.Value;
+                    _lastUsedNinjaPricerData = Settings.UseNinjaPricerData.Value;
+                }
 
                 // fetch defer list from API
                 var apiDeferItems = await _apiService.GenerateDeferListAsync((decimal)Settings.MinExaltedValue.Value);
@@ -683,6 +694,19 @@ namespace RitualHelper
             {
                 LogError($"Error updating defer item list: {ex.Message}");
             }
+        }
+
+        private bool ShouldRecreateApiService()
+        {
+            // recreate if league name or ninja pricer setting changed
+            return _lastUsedLeagueName != Settings.LeagueName.Value ||
+                   _lastUsedNinjaPricerData != Settings.UseNinjaPricerData.Value;
+        }
+
+        public override void OnPluginDestroyForHotReload()
+        {
+            base.OnPluginDestroyForHotReload();
+            _apiService?.Dispose();
         }
     }
 }

@@ -24,6 +24,8 @@ namespace RitualHelper
         [Menu("Enable API Integration", "Auto-populate defer list from PoE2 Scout API")]
         public ToggleNode EnableApiIntegration { get; set; } = new(false);
 
+        [Menu("Use NinjaPricer Data", "Read data from NinjaPricer cache instead of making API calls")]
+        public ToggleNode UseNinjaPricerData { get; set; } = new(false);
 
         [Menu("League Name", "Current PoE2 league name for API requests")]
         public TextNode LeagueName { get; set; } = new("Rise of the Abyssal");
