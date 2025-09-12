@@ -904,7 +904,10 @@ namespace RitualHelper
                     // restore enabled state
                     foreach (var item in newItemList)
                     {
-                        item.Enabled = enabledStates[item.Name];
+                        if (enabledStates.TryGetValue(item.Name, out var enabled))
+                        {
+                            item.Enabled = enabled;
+                        }
                     }
                     
                     // sort by priority, then by name
