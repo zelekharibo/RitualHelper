@@ -34,6 +34,7 @@ namespace RitualHelper
         private bool _isApiFetching = false;
         private string? _lastUsedLeagueName;
         private bool _lastUsedNinjaPricerData;
+        private readonly List<Element> _deferredItems = new();
 
         private bool MoveCancellationRequested => 
             Settings.CancelWithRightClick && (Control.MouseButtons & MouseButtons.Right) != 0;
@@ -106,6 +107,7 @@ namespace RitualHelper
 
             var ritualPanel = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualPanel?.IsVisible != true) return;
+
 
             // find defer button or cancel button
             var buttonToUse = GetDeferringElement() ?? GetCancelElement();
@@ -207,6 +209,71 @@ namespace RitualHelper
             return null;
         }
 
+        private Element GetConfirmElement()
+        {
+            var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
+            if (ritualWindow?.Children == null) return null;
+
+            return FindElementWithConfirmText(ritualWindow);
+        }
+
+        private Element FindElementWithConfirmText(Element parentElement)
+        {
+            if (parentElement?.Children == null) return null;
+
+            foreach (var element in parentElement.Children)
+            {
+                // check if this element has "confirm" text
+                if (!string.IsNullOrEmpty(element.Text) && 
+                    element.Text.ToLower().Contains("confirm"))
+                {
+                    return element;
+                }
+
+                // recursively search children
+                var result = FindElementWithConfirmText(element);
+                if (result != null)
+                {
+                    return result;
+                }
+            }
+
+            return null;
+        }
+
+        private Element GetRerollElement()
+        {
+            var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
+            if (ritualWindow?.Children == null) return null;
+
+            return FindElementWithRerollTooltip(ritualWindow);
+        }
+
+        private Element FindElementWithRerollTooltip(Element parentElement)
+        {
+            if (parentElement?.Children == null) return null;
+
+            foreach (var element in parentElement.Children)
+            {
+                // check if this element has a tooltip containing "reroll"
+                if (element.Tooltip != null && 
+                    !string.IsNullOrEmpty(element.Tooltip.Text) &&
+                    element.Tooltip.Text.ToLower().Contains("reroll"))
+                {
+                    return element;
+                }
+
+                // recursively search children
+                var result = FindElementWithRerollTooltip(element);
+                if (result != null)
+                {
+                    return result;
+                }
+            }
+
+            return null;
+        }
+
 
 
         private bool IsDeferringEnabled()
@@ -259,6 +326,9 @@ namespace RitualHelper
         {
             try
             {
+                // clear previously deferred items list
+                _deferredItems.Clear();
+                
                 var hasActiveItems = Settings.DeferGroup.GetActiveItems().Any();
                 
                 if (Settings.DeferExistingItems || hasActiveItems)
@@ -271,6 +341,24 @@ namespace RitualHelper
                 {
                     await DeferItemsByPriority();
                 }
+
+                // auto confirm if enabled
+                if (Settings.AutoConfirm.Value)
+                {
+                    await AutoConfirm();
+                    
+                    // auto pickup if both auto confirm and auto pickup are enabled
+                    if (Settings.AutoPickup.Value)
+                    {
+                        await AutoPickup();
+                    }
+                    
+                    // auto reroll if enabled (only works with auto confirm)
+                    if (Settings.AutoReroll.Value)
+                    {
+                        await AutoReroll();
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -278,7 +366,8 @@ namespace RitualHelper
             }
             finally
             {
-                // restore mouse to original position after all work is done
+                // clear deferred items list and restore mouse position
+                _deferredItems.Clear();
                 await RestoreMousePosition();
             }
         }
@@ -339,6 +428,10 @@ namespace RitualHelper
                 try
                 {
                     await ClickElement(element);
+                    
+                    // track deferred item for potential auto pickup
+                    _deferredItems.Add(element);
+                    
                     await Task.Delay(Settings.ActionDelay + RandomDelay());
                 }
                 catch (Exception ex)
@@ -483,6 +576,135 @@ namespace RitualHelper
             catch (Exception ex)
             {
                 LogError($"error clicking element: {ex.Message}");
+            }
+        }
+
+        private async Task CtrlClickElement(Element element)
+        {
+            if (element == null)
+            {
+                LogError("attempted to ctrl+click null element");
+                return;
+            }
+            
+            try
+            {
+                var position = element.GetClientRectCache.Center + 
+                              GameController.Window.GetWindowRectangleTimeCache.TopLeft;
+                await Mouse.MoveMouse(position);
+                await Task.Delay(RandomDelay());
+                
+                // hold ctrl and click
+                await Keyboard.KeyDown(Keys.LControlKey);
+                await Task.Delay(RandomDelay());
+                await Mouse.LeftDown();
+                await Task.Delay(RandomDelay());
+                await Mouse.LeftUp();
+                await Task.Delay(RandomDelay());
+                await Keyboard.KeyUp(Keys.LControlKey);
+            }
+            catch (Exception ex)
+            {
+                LogError($"error ctrl+clicking element: {ex.Message}");
+            }
+        }
+
+        private async Task AutoConfirm()
+        {
+            try
+            {
+                LogMessage("attempting auto confirm...");
+                
+                // wait a moment for the UI to update after deferring
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                
+                var confirmElement = GetConfirmElement();
+                if (confirmElement != null)
+                {
+                    LogMessage("confirm element found, clicking...");
+                    await ClickElement(confirmElement);
+                    await Task.Delay(Settings.ActionDelay + RandomDelay());
+                }
+                else
+                {
+                    LogMessage("confirm element not found");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError($"error during auto confirm: {ex.Message}");
+            }
+        }
+
+        private async Task AutoPickup()
+        {
+            try
+            {
+                LogMessage($"attempting auto pickup of {_deferredItems.Count} deferred items...");
+                
+                if (_deferredItems.Count == 0)
+                {
+                    LogMessage("no deferred items to pickup");
+                    return;
+                }
+                
+                // wait a moment for the UI to update after confirming
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                
+                var successfulPickups = 0;
+                
+                foreach (var item in _deferredItems)
+                {
+                    if (MoveCancellationRequested)
+                    {
+                        LogMessage("auto pickup cancelled by user (right-click)");
+                        break;
+                    }
+                    
+                    try
+                    {
+                        await CtrlClickElement(item);
+                        successfulPickups++;
+                        await Task.Delay(Settings.ActionDelay + RandomDelay());
+                    }
+                    catch (Exception ex)
+                    {
+                        LogError($"error during auto pickup of item: {ex.Message}");
+                    }
+                }
+                
+                LogMessage($"auto pickup completed: {successfulPickups}/{_deferredItems.Count} items picked up");
+            }
+            catch (Exception ex)
+            {
+                LogError($"error during auto pickup: {ex.Message}");
+            }
+        }
+
+        private async Task AutoReroll()
+        {
+            try
+            {
+                LogMessage("attempting auto reroll...");
+                
+                // wait a moment for the UI to update
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                
+                var rerollElement = GetRerollElement();
+                if (rerollElement != null)
+                {
+                    LogMessage("reroll element found, clicking...");
+                    await ClickElement(rerollElement);
+                    await Task.Delay(Settings.ActionDelay + RandomDelay());
+                }
+                else
+                {
+                    LogMessage("reroll element not found");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError($"error during auto reroll: {ex.Message}");
             }
         }
 
@@ -652,15 +874,20 @@ namespace RitualHelper
                     var manualItems = new List<DeferItem>();
                     var removedApiItems = new List<DeferItem>();
                     
+                    // store enabled state
+                    var enabledStates = new Dictionary<string, bool>();
+
                     foreach (var item in currentItems)
                     {
                         if (IsManualItem(item, apiItemNames))
                         {
                             manualItems.Add(item);
+                            enabledStates[item.Name] = item.Enabled;
                         }
                         else
                         {
                             removedApiItems.Add(item);
+                            enabledStates[item.Name] = item.Enabled;
                         }
                     }
                     
@@ -673,6 +900,12 @@ namespace RitualHelper
                     var newItemList = new List<DeferItem>();
                     newItemList.AddRange(manualItems);
                     newItemList.AddRange(apiDeferItems);
+
+                    // restore enabled state
+                    foreach (var item in newItemList)
+                    {
+                        item.Enabled = enabledStates[item.Name];
+                    }
                     
                     // sort by priority, then by name
                     var sortedItems = newItemList

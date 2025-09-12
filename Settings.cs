@@ -10,7 +10,7 @@ namespace RitualHelper
         public ToggleNode Enable { get; set; } = new(true);
         
         [Menu("Action Delay (ms)", "Delay between actions to simulate human behavior")]
-        public RangeNode<int> ActionDelay { get; set; } = new(75, 50, 1000);
+        public RangeNode<int> ActionDelay { get; set; } = new(75, 0, 1000);
 
         [Menu("Random Delay (ms)", "Random delay added to action delay (0-100ms)")]
         public RangeNode<int> RandomDelay { get; set; } = new(25, 0, 100);
@@ -20,6 +20,15 @@ namespace RitualHelper
 
         [Menu("Defer existing items", "Defer items that are already deferred")]
         public ToggleNode DeferExistingItems { get; set; } = new(true);
+
+        [Menu("Auto Confirm", "Automatically click confirm button after deferring")]
+        public ToggleNode AutoConfirm { get; set; } = new(false);
+
+        [Menu("Auto Pickup", "Automatically ctrl+click deferred items after confirming (requires Auto Confirm)")]
+        public ToggleNode AutoPickup { get; set; } = new(false);
+
+        [Menu("Auto Reroll", "Automatically click reroll button after confirm/pickup (requires Auto Confirm)")]
+        public ToggleNode AutoReroll { get; set; } = new(false);
 
         [Menu("Enable API Integration", "Auto-populate defer list from PoE2 Scout API")]
         public ToggleNode EnableApiIntegration { get; set; } = new(false);
