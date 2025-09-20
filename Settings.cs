@@ -10,7 +10,7 @@ namespace RitualHelper
         public ToggleNode Enable { get; set; } = new(true);
         
         [Menu("Action Delay (ms)", "Delay between actions to simulate human behavior")]
-        public RangeNode<int> ActionDelay { get; set; } = new(75, 0, 1000);
+        public RangeNode<int> ActionDelay { get; set; } = new(75, 10, 1000);
 
         [Menu("Random Delay (ms)", "Random delay added to action delay (0-100ms)")]
         public RangeNode<int> RandomDelay { get; set; } = new(25, 0, 100);

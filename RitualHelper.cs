@@ -4,19 +4,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ExileCore2;
 using ExileCore2.Shared;
 using ExileCore2.PoEMemory;
 using ExileCore2.PoEMemory.Components;
-using ExileCore2.PoEMemory.Elements;
-using ExileCore2.PoEMemory.Elements.InventoryElements;
-using ExileCore2.PoEMemory.MemoryObjects;
-using GameOffsets2.Native;
 using ImGuiNET;
-using RitualHelper.Utils;
 
 namespace RitualHelper
 {
@@ -30,7 +24,7 @@ namespace RitualHelper
         private readonly ConcurrentDictionary<RectangleF, bool?> _mouseStateForRect = new();
         private PoE2ScoutApiService? _apiService;
         private DateTime _lastApiUpdate = DateTime.MinValue;
-        private Vector2i? _originalMousePosition;
+        private Vector2? _originalMousePosition;
         private bool _isApiFetching = false;
         private string? _lastUsedLeagueName;
         private bool _lastUsedNinjaPricerData;
@@ -143,30 +137,7 @@ namespace RitualHelper
             return StaticRandom.Next(Settings.RandomDelay);
         }
 
-
-        private Element GetTributeElement()
-        {
-            var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
-            if (ritualWindow?.Children == null) return null;
-
-            foreach (var element in ritualWindow.Children)
-            {
-                if (element?.Children == null) continue;
-                
-                foreach (var subElement in element.Children)
-                {
-                    var text = subElement?.Text;
-                    if (!string.IsNullOrEmpty(text) && text.Contains("Tribute Remaining"))
-                    {
-                        return subElement;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private Element GetDeferringElement()
+        private Element? GetDeferringElement()
         {
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualWindow?.Children == null) return null;
@@ -188,7 +159,7 @@ namespace RitualHelper
         }
 
 
-        private Element GetCancelElement()
+        private Element? GetCancelElement()
         {
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualWindow?.Children == null) return null;
@@ -209,7 +180,7 @@ namespace RitualHelper
             return null;
         }
 
-        private Element GetConfirmElement()
+        private Element? GetConfirmElement()
         {
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualWindow?.Children == null) return null;
@@ -217,7 +188,7 @@ namespace RitualHelper
             return FindElementWithConfirmText(ritualWindow);
         }
 
-        private Element FindElementWithConfirmText(Element parentElement)
+        private Element? FindElementWithConfirmText(Element parentElement)
         {
             if (parentElement?.Children == null) return null;
 
@@ -241,7 +212,7 @@ namespace RitualHelper
             return null;
         }
 
-        private Element GetRerollElement()
+        private Element? GetRerollElement()
         {
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualWindow?.Children == null) return null;
@@ -249,7 +220,7 @@ namespace RitualHelper
             return FindElementWithRerollTooltip(ritualWindow);
         }
 
-        private Element FindElementWithRerollTooltip(Element parentElement)
+        private Element? FindElementWithRerollTooltip(Element parentElement)
         {
             if (parentElement?.Children == null) return null;
 
@@ -400,7 +371,7 @@ namespace RitualHelper
                         // add new items, or existing items if the setting is enabled
                         if (!isAlreadyDeferred || Settings.DeferExistingItems)
                         {
-                            itemsToDefer.Add((element, matchingItem.Priority, isAlreadyDeferred));
+                            itemsToDefer.Add((element!, matchingItem.Priority, isAlreadyDeferred));
                         }
                     }
                 }
@@ -444,7 +415,7 @@ namespace RitualHelper
         private bool IsButtonPressed(RectangleF buttonRect)
         {
             var prevState = _mouseStateForRect.GetValueOrDefault(buttonRect);
-            var cursorPos = Mouse.GetCursorPosition();
+            var cursorPos = Input.MousePosition;
             var windowOffset = GameController.Window.GetWindowRectangleTimeCache.TopLeft;
             var relativeCursorPos = new Vector2(cursorPos.X - windowOffset.X, cursorPos.Y - windowOffset.Y);
             
@@ -562,16 +533,15 @@ namespace RitualHelper
                 // capture original mouse position on first click
                 if (!_originalMousePosition.HasValue)
                 {
-                    _originalMousePosition = Mouse.GetCursorPosition();
+                    _originalMousePosition = Input.MousePosition;
                 }
 
                 var position = element.GetClientRectCache.Center + 
                               GameController.Window.GetWindowRectangleTimeCache.TopLeft;
-                await Mouse.MoveMouse(position);
-                await Task.Delay(RandomDelay());
-                await Mouse.LeftDown();
-                await Task.Delay(RandomDelay());
-                await Mouse.LeftUp();
+                Input.SetCursorPos(position);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                Input.Click(MouseButtons.Left);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
             }
             catch (Exception ex)
             {
@@ -591,17 +561,17 @@ namespace RitualHelper
             {
                 var position = element.GetClientRectCache.Center + 
                               GameController.Window.GetWindowRectangleTimeCache.TopLeft;
-                await Mouse.MoveMouse(position);
-                await Task.Delay(RandomDelay());
+                Input.SetCursorPos(position);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
                 
                 // hold ctrl and click
-                await Keyboard.KeyDown(Keys.LControlKey);
-                await Task.Delay(RandomDelay());
-                await Mouse.LeftDown();
-                await Task.Delay(RandomDelay());
-                await Mouse.LeftUp();
-                await Task.Delay(RandomDelay());
-                await Keyboard.KeyUp(Keys.LControlKey);
+                Input.KeyDown(Keys.LControlKey);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                Input.Click(MouseButtons.Left);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                Input.Click(MouseButtons.Left);
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+                Input.KeyUp(Keys.LControlKey);
             }
             catch (Exception ex)
             {
@@ -714,8 +684,9 @@ namespace RitualHelper
             {
                 try
                 {
-                    await Mouse.MoveMouse(_originalMousePosition.Value);
+                    Input.SetCursorPos(_originalMousePosition.Value);
                     _originalMousePosition = null; // reset for next operation
+                    await Task.Delay(Settings.ActionDelay + RandomDelay());
                 }
                 catch (Exception ex)
                 {
