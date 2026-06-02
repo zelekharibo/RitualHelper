@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ExileCore2.Shared;
 
@@ -13,6 +14,7 @@ namespace RitualHelper
     {
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl = "https://poe2scout.com/api";
+        private readonly string _realm = "poe2";
         private readonly string _leagueName;
         private readonly Action<string> _logInfo;
         private readonly Action<string> _logError;
@@ -21,9 +23,11 @@ namespace RitualHelper
         private DateTime _lastFetch = DateTime.MinValue;
         private List<PoE2ScoutItem> _cachedCurrency = new();
         private List<PoE2ScoutItem> _cachedOmens = new();
+        private List<PoE2ScoutItem> _cachedUniques = new();
         private readonly TimeSpan _cacheExpiry = TimeSpan.FromMinutes(5);
         private DateTime _lastRequestTime = DateTime.MinValue;
         private readonly TimeSpan _requestDelay = TimeSpan.FromSeconds(5);
+        private List<string>? _cachedUniqueCategoryApiIds;
 
         public PoE2ScoutApiService(string leagueName = "Rise of the Abyssal", 
             Action<string>? logInfo = null, Action<string>? logError = null, bool useNinjaPricerData = false)
@@ -128,7 +132,47 @@ namespace RitualHelper
             }
         }
 
-        public async Task<List<DeferItem>> GenerateDeferListAsync(decimal minExaltedValue = 0.1m)
+        public async Task<List<PoE2ScoutItem>> GetUniqueItemsAsync()
+        {
+            if (IsCacheValid(_cachedUniques))
+            {
+                return _cachedUniques;
+            }
+
+            try
+            {
+                if (_useNinjaPricerData)
+                {
+                    _logInfo("Reading unique item data from NinjaPricer cache...");
+                    _cachedUniques = await LoadUniqueDataFromNinjaPricerCache();
+                }
+                else
+                {
+                    _logInfo("Fetching unique item data from API...");
+                    _cachedUniques = await LoadUniqueDataFromApi();
+                }
+
+                if (_cachedUniques.Any())
+                {
+                    _lastFetch = DateTime.Now;
+                    _logInfo($"Successfully loaded {_cachedUniques.Count} unique items");
+                }
+                else
+                {
+                    _logInfo("No unique items found");
+                }
+
+                return _cachedUniques;
+            }
+            catch (Exception ex)
+            {
+                _logError($"Error loading unique item data: {ex.Message}");
+                LogInnerException(ex);
+                return _cachedUniques;
+            }
+        }
+
+        public async Task<List<DeferItem>> GenerateDeferListAsync(decimal minExaltedValue = 0.1m, decimal minUniqueExaltedValue = 1m)
         {
             var deferItems = new List<DeferItem>();
 
@@ -137,13 +181,16 @@ namespace RitualHelper
                 // fetch and filter valuable items
                 var currencyData = await GetCurrencyDataAsync();
                 var omenData = await GetRitualOmensAsync();
+                var uniqueData = await GetUniqueItemsAsync();
                 
-                var valuableCurrency = FilterValuableItems(currencyData, minExaltedValue);
-                var valuableOmens = FilterValuableItems(omenData, minExaltedValue);
+                var valuableCurrency = FilterStackableItems(currencyData);
+                var valuableOmens = FilterStackableItems(omenData);
+                var valuableUniques = FilterValuableItems(uniqueData, minUniqueExaltedValue);
 
                 // convert to defer items with API prefix
-                AddItemsToDefer(deferItems, valuableCurrency);
-                AddItemsToDefer(deferItems, valuableOmens);
+                AddItemsToDefer(deferItems, valuableCurrency, minExaltedValue, true);
+                AddItemsToDefer(deferItems, valuableOmens, minExaltedValue, true);
+                AddItemsToDefer(deferItems, valuableUniques);
 
                 _logInfo($"Generated {deferItems.Count} defer items from API data");
                 return deferItems
@@ -156,6 +203,80 @@ namespace RitualHelper
                 _logError($"Error generating defer list: {ex.Message}");
                 return deferItems;
             }
+        }
+
+        public async Task<DeferItem?> GetFallbackDeferItemAsync(string itemBaseName, int stackSize, decimal minExaltedValue, decimal minUniqueExaltedValue)
+        {
+            await EnsureAllDataLoadedAsync();
+            return TryGetFallbackDeferItemCached(itemBaseName, stackSize, minExaltedValue, minUniqueExaltedValue);
+        }
+
+        public DeferItem? TryGetFallbackDeferItemCached(string itemBaseName, int stackSize, decimal minExaltedValue, decimal minUniqueExaltedValue)
+        {
+            var stackableMatch = FindFallbackMatch(_cachedCurrency, itemBaseName);
+            stackableMatch ??= FindFallbackMatch(_cachedOmens, itemBaseName);
+
+            if (stackableMatch != null)
+            {
+                var minStackSize = CalculateMinimumStackSize(stackableMatch, minExaltedValue);
+                if (stackableMatch.ForceInclude || stackSize >= minStackSize)
+                {
+                    return new DeferItem(
+                        NormalizeApiItemNameForMatching(stackableMatch.GetName()),
+                        CalculatePriority(stackableMatch.GetExaltedValue()),
+                        minStackSize,
+                        true);
+                }
+            }
+
+            var uniqueMatch = FindFallbackMatch(_cachedUniques, itemBaseName);
+            if (uniqueMatch != null && (uniqueMatch.ForceInclude || uniqueMatch.GetExaltedValue() >= minUniqueExaltedValue))
+            {
+                return new DeferItem(
+                    NormalizeApiItemNameForMatching(uniqueMatch.GetName()),
+                    CalculatePriority(uniqueMatch.GetExaltedValue()),
+                    1,
+                    true);
+            }
+
+            return null;
+        }
+
+        private async Task EnsureAllDataLoadedAsync()
+        {
+            await GetCurrencyDataAsync();
+            await GetRitualOmensAsync();
+            await GetUniqueItemsAsync();
+        }
+
+        private async Task<List<PoE2ScoutItem>> LoadUniqueDataFromNinjaPricerCache()
+        {
+            var uniqueFileNames = new[]
+            {
+                "Accessories",
+                "Armour",
+                "Flasks",
+                "Jewels",
+                "Maps",
+                "Weapons",
+                "SanctumRelics"
+            };
+
+            var allItems = new List<PoE2ScoutItem>();
+
+            foreach (var fileName in uniqueFileNames)
+            {
+                var items = await LoadDataFromNinjaPricerCache(fileName);
+                if (items.Any())
+                {
+                    allItems.AddRange(items);
+                }
+            }
+
+            return allItems
+                .GroupBy(item => item.GetName(), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(item => item.GetExaltedValue()).First())
+                .ToList();
         }
 
         private async Task<List<PoE2ScoutItem>> LoadDataFromNinjaPricerCache(string category)
@@ -189,19 +310,7 @@ namespace RitualHelper
                     PropertyNameCaseInsensitive = true
                 };
                 
-                // try to parse as either a single response or array of items
-                List<PoE2ScoutItem> items;
-                try
-                {
-                    // first try to parse as API response format
-                    var response = System.Text.Json.JsonSerializer.Deserialize<PoE2ScoutApiResponse>(jsonContent, options);
-                    items = response?.Items ?? new List<PoE2ScoutItem>();
-                }
-                catch
-                {
-                    // if that fails, try to parse as direct array of items
-                    items = System.Text.Json.JsonSerializer.Deserialize<List<PoE2ScoutItem>>(jsonContent, options) ?? new List<PoE2ScoutItem>();
-                }
+                var items = DeserializeNinjaPricerItems(jsonContent, options);
                 
                 _logInfo($"Successfully parsed {items.Count} items from NinjaPricer cache");
                 return items;
@@ -267,6 +376,500 @@ namespace RitualHelper
             return items;
         }
 
+        private async Task<List<PoE2ScoutItem>> LoadUniqueDataFromApi()
+        {
+            var uniqueCategoryApiIds = await GetUniqueCategoryApiIdsAsync();
+            var allItems = new List<PoE2ScoutItem>();
+
+            foreach (var categoryApiId in uniqueCategoryApiIds)
+            {
+                var categoryItems = await LoadPagedUniqueDataFromApi(categoryApiId);
+                if (categoryItems.Any())
+                {
+                    allItems.AddRange(categoryItems);
+                }
+            }
+
+            return allItems
+                .GroupBy(item => item.GetName(), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(item => item.GetExaltedValue()).First())
+                .ToList();
+        }
+
+        private async Task<List<string>> GetUniqueCategoryApiIdsAsync()
+        {
+            if (_cachedUniqueCategoryApiIds?.Any() == true)
+            {
+                return _cachedUniqueCategoryApiIds;
+            }
+
+            try
+            {
+                await ApplyRateLimit();
+
+                var url = BuildItemCategoriesUrl();
+                var jsonResponse = await _httpClient.GetStringAsync(url);
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var categoriesResponse = JsonSerializer.Deserialize<CategoriesResponse>(jsonResponse, options);
+                var categoryApiIds = categoriesResponse?.UniqueCategories?
+                    .Select(category => category.ApiId)
+                    .Where(apiId => !string.IsNullOrWhiteSpace(apiId))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (categoryApiIds?.Any() == true)
+                {
+                    _cachedUniqueCategoryApiIds = categoryApiIds;
+                    return categoryApiIds;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logError($"Error loading unique categories: {ex.Message}");
+                LogInnerException(ex);
+            }
+
+            _cachedUniqueCategoryApiIds = new List<string>
+            {
+                "accessory",
+                "armour",
+                "flask",
+                "jewel",
+                "map",
+                "weapon",
+                "sanctum"
+            };
+
+            return _cachedUniqueCategoryApiIds;
+        }
+
+        private async Task<List<PoE2ScoutItem>> LoadPagedUniqueDataFromApi(string category)
+        {
+            var items = new List<PoE2ScoutItem>();
+            var page = 1;
+            PoE2ScoutApiResponse container;
+
+            _logInfo($"Starting unique {category} data download...");
+
+            do
+            {
+                var url = BuildUniqueApiUrl(category, page);
+
+                try
+                {
+                    await ApplyRateLimit();
+
+                    var jsonResponse = await _httpClient.GetStringAsync(url);
+                    if (string.IsNullOrEmpty(jsonResponse))
+                    {
+                        _logError($"Unique page {page} returned empty response for {category}");
+                        break;
+                    }
+
+                    container = DeserializeApiResponse(jsonResponse, page);
+                    if (container == null) break;
+
+                    if (container.Items?.Any() == true)
+                    {
+                        items.AddRange(container.Items);
+                        LogDownloadProgress(page, container);
+                    }
+                    else
+                    {
+                        if (page == 1) _logInfo($"Unique page {page} returned no items for {category}");
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logError($"Failed to download unique page {page} for {category}: {ex.Message}");
+                    LogInnerException(ex);
+                    break;
+                }
+
+                page++;
+            } while (container.CurrentPage < container.Pages);
+
+            _logInfo($"Finished downloading unique {category}: {items.Count} total items");
+            return items;
+        }
+
+        private static List<PoE2ScoutItem> DeserializeNinjaPricerItems(string jsonContent, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.Parse(jsonContent);
+
+            if (document.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                return JsonSerializer.Deserialize<List<PoE2ScoutItem>>(jsonContent, options) ?? new List<PoE2ScoutItem>();
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return new List<PoE2ScoutItem>();
+            }
+
+            var root = document.RootElement;
+
+            if (LooksLikeNinjaPricerCache(root))
+            {
+                return DeserializeNinjaPricerCache(root, options);
+            }
+
+            if (TryDeserializeItemsProperty(root, "items", options, out var items) ||
+                TryDeserializeItemsProperty(root, "data", options, out items) ||
+                TryDeserializeItemsProperty(root, "result", options, out items) ||
+                TryDeserializeItemsProperty(root, "value", options, out items))
+            {
+                return items;
+            }
+
+            if (LooksLikeScoutItem(root))
+            {
+                var item = JsonSerializer.Deserialize<PoE2ScoutItem>(jsonContent, options);
+                return item == null ? new List<PoE2ScoutItem>() : new List<PoE2ScoutItem> { item };
+            }
+
+            return new List<PoE2ScoutItem>();
+        }
+
+        private static List<PoE2ScoutItem> DeserializeNinjaPricerCache(JsonElement root, JsonSerializerOptions options)
+        {
+            var metadataById = new Dictionary<string, NinjaPricerItemMetadata>(StringComparer.OrdinalIgnoreCase);
+
+            if (TryGetPropertyIgnoreCase(root, "items", out var itemsElement) &&
+                itemsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in itemsElement.EnumerateArray())
+                {
+                    var metadata = JsonSerializer.Deserialize<NinjaPricerItemMetadata>(element.GetRawText(), options);
+                    if (metadata != null && !string.IsNullOrWhiteSpace(metadata.Id))
+                    {
+                        metadataById[metadata.Id] = metadata;
+                    }
+                }
+            }
+
+            var core = TryGetPropertyIgnoreCase(root, "core", out var coreElement) && coreElement.ValueKind == JsonValueKind.Object
+                ? JsonSerializer.Deserialize<NinjaPricerCore>(coreElement.GetRawText(), options)
+                : null;
+
+            var results = new List<PoE2ScoutItem>();
+
+            if (TryGetPropertyIgnoreCase(root, "lines", out var linesElement) &&
+                linesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in linesElement.EnumerateArray())
+                {
+                    var line = JsonSerializer.Deserialize<NinjaPricerLine>(element.GetRawText(), options);
+                    var lineApiId = line?.GetApiId();
+                    if (line == null || string.IsNullOrWhiteSpace(lineApiId))
+                    {
+                        continue;
+                    }
+
+                    metadataById.TryGetValue(lineApiId, out var metadata);
+                    var item = MapNinjaPricerItem(line, metadata, core);
+                    if (item != null)
+                    {
+                        results.Add(item);
+                    }
+                }
+            }
+
+            if (results.Count > 0)
+            {
+                return results;
+            }
+
+            if (TryGetPropertyIgnoreCase(root, "LinesByName", out var linesByNameElement) &&
+                linesByNameElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var entry in linesByNameElement.EnumerateObject())
+                {
+                    if (entry.Value.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var pair = JsonSerializer.Deserialize<NinjaPricerLinePair>(entry.Value.GetRawText(), options);
+                    var pairApiId = pair?.Item1?.GetApiId();
+                    if (pair?.Item1 == null || string.IsNullOrWhiteSpace(pairApiId))
+                    {
+                        continue;
+                    }
+
+                    var metadata = pair.Item2;
+                    if (metadata == null && metadataById.TryGetValue(pairApiId, out var existingMetadata))
+                    {
+                        metadata = existingMetadata;
+                    }
+
+                    var item = MapNinjaPricerItem(pair.Item1, metadata, core);
+                    if (item != null)
+                    {
+                        results.Add(item);
+                    }
+                }
+            }
+
+            return results;
+        }
+
+        private static PoE2ScoutItem? MapNinjaPricerItem(NinjaPricerLine line, NinjaPricerItemMetadata? metadata, NinjaPricerCore? core)
+        {
+            var apiId = !string.IsNullOrWhiteSpace(metadata?.Id)
+                ? metadata.Id
+                : line.GetApiId();
+            if (string.IsNullOrWhiteSpace(apiId))
+            {
+                return null;
+            }
+
+            var itemName = metadata?.Name;
+            if (string.IsNullOrWhiteSpace(itemName))
+            {
+                itemName = line.GetDisplayName();
+            }
+
+            var iconUrl = NormalizeNinjaPricerImageUrl(metadata?.Image);
+            if (string.IsNullOrWhiteSpace(iconUrl))
+            {
+                iconUrl = NormalizeNinjaPricerImageUrl(line.Icon);
+            }
+
+            var categoryApiId = metadata?.Category;
+            if (string.IsNullOrWhiteSpace(categoryApiId))
+            {
+                categoryApiId = NormalizeCategoryApiId(line.Category);
+            }
+
+            return new PoE2ScoutItem
+            {
+                ApiId = apiId,
+                Text = itemName ?? apiId,
+                CategoryApiId = categoryApiId ?? string.Empty,
+                IconUrl = iconUrl,
+                CurrentPrice = ConvertNinjaPricerValueToExalted(line.PrimaryValue, core),
+                ForceInclude = ShouldForceIncludeNinjaPricerItem(line.PrimaryValue, core)
+            };
+        }
+
+        private static decimal ConvertNinjaPricerValueToExalted(decimal primaryValue, NinjaPricerCore? core)
+        {
+            if (core == null || string.IsNullOrWhiteSpace(core.Primary))
+            {
+                return primaryValue;
+            }
+
+            if (string.Equals(core.Primary, "exalted", StringComparison.OrdinalIgnoreCase))
+            {
+                return primaryValue;
+            }
+
+            if (core.Rates.TryGetValue("exalted", out var exaltedRate) && exaltedRate.HasValue)
+            {
+                return primaryValue * exaltedRate.Value;
+            }
+
+            return primaryValue;
+        }
+
+        private static bool ShouldForceIncludeNinjaPricerItem(decimal primaryValue, NinjaPricerCore? core)
+        {
+            if (primaryValue <= 0 || core == null)
+            {
+                return false;
+            }
+
+            var hasExaltedRate = core.Rates.TryGetValue("exalted", out var exaltedRate) && exaltedRate.HasValue;
+            var hasDivinePricing = string.Equals(core.Primary, "divine", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(core.Secondary, "divine", StringComparison.OrdinalIgnoreCase);
+
+            return !hasExaltedRate && hasDivinePricing;
+        }
+
+        private static string NormalizeNinjaPricerImageUrl(string? image)
+        {
+            if (string.IsNullOrWhiteSpace(image))
+            {
+                return string.Empty;
+            }
+
+            if (Uri.TryCreate(image, UriKind.Absolute, out _))
+            {
+                return image;
+            }
+
+            return $"https://web.poecdn.com{image}";
+        }
+
+        private static string NormalizeCategoryApiId(string? category)
+        {
+            if (string.IsNullOrWhiteSpace(category))
+            {
+                return string.Empty;
+            }
+
+            return category.Replace(" ", string.Empty).ToLowerInvariant() switch
+            {
+                "belt" => "accessory",
+                "ring" => "accessory",
+                "amulet" => "accessory",
+                "focus" => "weapon",
+                "crossbow" => "weapon",
+                "bow" => "weapon",
+                "wand" => "weapon",
+                "staff" => "weapon",
+                "spear" => "weapon",
+                "quarterstaff" => "weapon",
+                "mace" => "weapon",
+                "flail" => "weapon",
+                "axe" => "weapon",
+                "sword" => "weapon",
+                "helmet" => "armour",
+                "bodyarmour" => "armour",
+                "gloves" => "armour",
+                "boots" => "armour",
+                "shield" => "armour",
+                "sanctumrelic" => "sanctum",
+                _ => category.Replace(" ", string.Empty).ToLowerInvariant()
+            };
+        }
+
+        private static bool LooksLikeNinjaPricerCache(JsonElement root)
+        {
+            return TryGetPropertyIgnoreCase(root, "lines", out _) ||
+                   TryGetPropertyIgnoreCase(root, "LinesByName", out _);
+        }
+
+        private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+
+            value = default;
+            return false;
+        }
+
+        private static bool TryDeserializeItemsProperty(JsonElement root, string propertyName, JsonSerializerOptions options, out List<PoE2ScoutItem> items)
+        {
+            foreach (var property in root.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    items = JsonSerializer.Deserialize<List<PoE2ScoutItem>>(property.Value.GetRawText(), options) ?? new List<PoE2ScoutItem>();
+                    return true;
+                }
+
+                if (property.Value.ValueKind == JsonValueKind.Object && LooksLikeScoutItem(property.Value))
+                {
+                    var item = JsonSerializer.Deserialize<PoE2ScoutItem>(property.Value.GetRawText(), options);
+                    items = item == null ? new List<PoE2ScoutItem>() : new List<PoE2ScoutItem> { item };
+                    return true;
+                }
+            }
+
+            items = new List<PoE2ScoutItem>();
+            return false;
+        }
+
+        private static bool LooksLikeScoutItem(JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, "apiId", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(property.Name, "text", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(property.Name, "categoryApiId", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private sealed class NinjaPricerCore
+        {
+            public Dictionary<string, decimal?> Rates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+            public string Primary { get; set; } = string.Empty;
+            public string Secondary { get; set; } = string.Empty;
+        }
+
+        private sealed class NinjaPricerLine
+        {
+            public JsonElement Id { get; set; }
+            public string DetailsId { get; set; } = string.Empty;
+            public string ItemId { get; set; } = string.Empty;
+            public string Name { get; set; } = string.Empty;
+            public string Icon { get; set; } = string.Empty;
+            public string Category { get; set; } = string.Empty;
+            public decimal PrimaryValue { get; set; }
+
+            public string GetApiId()
+            {
+                if (!string.IsNullOrWhiteSpace(DetailsId))
+                {
+                    return DetailsId;
+                }
+
+                return Id.ValueKind switch
+                {
+                    JsonValueKind.String => Id.GetString() ?? string.Empty,
+                    JsonValueKind.Number => Id.TryGetInt64(out var numericId) ? numericId.ToString() : string.Empty,
+                    _ => string.Empty
+                };
+            }
+
+            public string GetDisplayName()
+            {
+                if (!string.IsNullOrWhiteSpace(Name))
+                {
+                    return Name;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ItemId))
+                {
+                    return ItemId;
+                }
+
+                return GetApiId();
+            }
+        }
+
+        private sealed class NinjaPricerItemMetadata
+        {
+            public string Id { get; set; } = string.Empty;
+            public string Name { get; set; } = string.Empty;
+            public string Image { get; set; } = string.Empty;
+            public string Category { get; set; } = string.Empty;
+        }
+
+        private sealed class NinjaPricerLinePair
+        {
+            public NinjaPricerLine? Item1 { get; set; }
+            public NinjaPricerItemMetadata? Item2 { get; set; }
+        }
+
         private static int CalculatePriority(decimal exaltedValue)
         {
             return exaltedValue switch
@@ -292,7 +895,15 @@ namespace RitualHelper
         private static List<PoE2ScoutItem> FilterValuableItems(List<PoE2ScoutItem> items, decimal minValue)
         {
             return items
-                .Where(item => item?.GetExaltedValue() >= minValue)
+                .Where(item => item != null && (item.ForceInclude || item.GetExaltedValue() >= minValue))
+                .OrderByDescending(item => item.GetExaltedValue())
+                .ToList();
+        }
+
+        private static List<PoE2ScoutItem> FilterStackableItems(List<PoE2ScoutItem> items)
+        {
+            return items
+                .Where(item => item != null && (item.ForceInclude || item.GetExaltedValue() > 0))
                 .OrderByDescending(item => item.GetExaltedValue())
                 .ToList();
         }
@@ -302,14 +913,78 @@ namespace RitualHelper
             foreach (var item in apiItems.Where(i => i != null && !string.IsNullOrEmpty(i.GetName())))
             {
                 var priority = CalculatePriority(item.GetExaltedValue());
-                deferItems.Add(new DeferItem(item.GetName(), priority, 1, true));
+                deferItems.Add(new DeferItem(NormalizeApiItemNameForMatching(item.GetName()), priority, 1, true));
             }
+        }
+
+        private static void AddItemsToDefer(List<DeferItem> deferItems, List<PoE2ScoutItem> apiItems, decimal minValue, bool useStackValue)
+        {
+            foreach (var item in apiItems.Where(i => i != null && !string.IsNullOrEmpty(i.GetName())))
+            {
+                var priority = CalculatePriority(item.GetExaltedValue());
+                var minStackSize = useStackValue ? CalculateMinimumStackSize(item, minValue) : 1;
+                deferItems.Add(new DeferItem(NormalizeApiItemNameForMatching(item.GetName()), priority, minStackSize, true));
+            }
+        }
+
+        private static string NormalizeApiItemNameForMatching(string itemName)
+        {
+            return itemName;
+        }
+
+        private static int CalculateMinimumStackSize(PoE2ScoutItem item, decimal minValue)
+        {
+            if (item.ForceInclude)
+            {
+                return 1;
+            }
+
+            var itemValue = item.GetExaltedValue();
+            if (itemValue <= 0)
+            {
+                return int.MaxValue;
+            }
+
+            var requiredStacks = decimal.Ceiling(minValue / itemValue);
+            if (requiredStacks <= 1)
+            {
+                return 1;
+            }
+
+            if (requiredStacks >= int.MaxValue)
+            {
+                return int.MaxValue;
+            }
+
+            return (int)requiredStacks;
+        }
+
+        private static PoE2ScoutItem? FindFallbackMatch(IEnumerable<PoE2ScoutItem> items, string itemBaseName)
+        {
+            return items.FirstOrDefault(item =>
+                item != null &&
+                !string.IsNullOrEmpty(item.GetName()) &&
+                itemBaseName.Contains(NormalizeApiItemNameForMatching(item.GetName()), StringComparison.OrdinalIgnoreCase));
         }
         
         private string BuildApiUrl(string category, int page)
         {
             var encodedLeague = Uri.EscapeDataString(_leagueName);
-            return $"{_baseUrl}/items/currency/{category}?league={encodedLeague}&page={page}&perPage=250";
+            var encodedCategory = Uri.EscapeDataString(category);
+            return $"{_baseUrl}/{_realm}/Leagues/{encodedLeague}/Currencies/ByCategory?Category={encodedCategory}&Page={page}&PerPage=250";
+        }
+
+        private string BuildUniqueApiUrl(string category, int page)
+        {
+            var encodedLeague = Uri.EscapeDataString(_leagueName);
+            var encodedCategory = Uri.EscapeDataString(category);
+            return $"{_baseUrl}/{_realm}/Leagues/{encodedLeague}/Uniques/ByCategory?Category={encodedCategory}&Page={page}&PerPage=250";
+        }
+
+        private string BuildItemCategoriesUrl()
+        {
+            var encodedLeague = Uri.EscapeDataString(_leagueName);
+            return $"{_baseUrl}/{_realm}/Leagues/{encodedLeague}/Items/Categories";
         }
         
         private async Task ApplyRateLimit()

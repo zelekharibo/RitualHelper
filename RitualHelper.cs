@@ -4,19 +4,23 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ExileCore2;
 using ExileCore2.Shared;
 using ExileCore2.PoEMemory;
 using ExileCore2.PoEMemory.Components;
+using ExileCore2.PoEMemory.MemoryObjects;
 using ImGuiNET;
+using ExileCore2.Shared.Enums;
 
 namespace RitualHelper
 {
     public class RitualHelper : BaseSettingsPlugin<Settings>
     {
         private const float ButtonOffset = 20f;
+        private const float DebugBorderThickness = 2f;
         private const float ButtonSize = 37f;
         private const string ImageName = "pick.png";
         
@@ -29,6 +33,7 @@ namespace RitualHelper
         private string? _lastUsedLeagueName;
         private bool _lastUsedNinjaPricerData;
         private readonly List<Element> _deferredItems = new();
+        private Dictionary<string, List<string>>? _uniqueArtMapping;
 
         private bool MoveCancellationRequested => 
             Settings.CancelWithRightClick && (Control.MouseButtons & MouseButtons.Right) != 0;
@@ -100,22 +105,39 @@ namespace RitualHelper
             }
 
             var ritualPanel = GameController.IngameState.IngameUi.RitualWindow;
-            if (ritualPanel?.IsVisible != true) return;
+            if (ritualPanel?.IsVisible != true) {
+                LogMessage("ritual panel not visible");
+                return;
+            }
 
+            if (Settings.DrawDebugOverlay.Value)
+            {
+                DrawRitualItemDebugOverlays();
+            }
 
-            // find defer button or cancel button
-            var buttonToUse = GetDeferringElement() ?? GetCancelElement();
-            if (buttonToUse == null) return;
-
-            var buttonPos = buttonToUse.GetClientRectCache.TopRight + 
-                           GameController.Window.GetWindowRectangleTimeCache.TopLeft;
-            var buttonRect = new RectangleF(
-                buttonPos.X + ButtonSize + ButtonOffset, 
-                buttonPos.Y, 
-                ButtonSize, 
-                ButtonSize);
+            RectangleF buttonRect;
+            var rerollElement = GetRerollElement();
+            if (rerollElement != null)
+            {
+                var rerollRect = rerollElement.GetClientRectCache;
+                var rerollPos = rerollRect.TopLeft + GameController.Window.GetWindowRectangleTimeCache.TopLeft;
+                var buttonY = rerollPos.Y + Math.Max(0, (rerollRect.Height - ButtonSize) / 2f);
+                buttonRect = new RectangleF(
+                    rerollPos.X - ButtonOffset - ButtonSize,
+                    buttonY,
+                    ButtonSize,
+                    ButtonSize);
+            }
+            else
+            {
+                // debug print
+                LogMessage("reroll element not found");
+                return;
+            }
             
             Graphics.DrawImage(ImageName, buttonRect);
+            // debug print
+            LogMessage("drawing button at " + buttonRect.ToString());
 
             if (IsButtonPressed(buttonRect))
             {
@@ -128,6 +150,83 @@ namespace RitualHelper
                     }
                 });
                 StartDefer();
+            }
+        }
+
+        private void DrawRitualItemDebugOverlays()
+        {
+            var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
+            if (ritualWindow?.Items == null) return;
+
+            var activeItems = Settings.DeferGroup.GetActiveItems().ToList();
+            var windowOffset = GameController.Window.GetWindowRectangleTimeCache.TopLeft;
+            var drawList = ImGui.GetForegroundDrawList();
+            var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value && EnsureApiServiceAvailable();
+
+            foreach (var element in ritualWindow.Items)
+            {
+                try
+                {
+                    var baseItemType = GameController.Files.BaseItemTypes.Translate(element.Item.Metadata);
+                    var itemMatchName = GetItemMatchName(element.Item, baseItemType.BaseName);
+                    var stackSize = element.Item.GetComponent<Stack>()?.Size ?? 1;
+                    var matchingRules = activeItems
+                        .Where(item => item.Enabled &&
+                                       !string.IsNullOrEmpty(item.Name) &&
+                                       itemMatchName.Contains(item.Name, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    var matchingItem = matchingRules.FirstOrDefault(item => stackSize >= item.MinStackSize);
+                    var isAlreadyDeferred = element?.Children?.Count >= 3;
+
+                    var status = "ignore";
+                    var color = new Vector4(0.6f, 0.6f, 0.6f, 1f);
+
+                    if (matchingItem != null)
+                    {
+                        if (isAlreadyDeferred && !Settings.DeferExistingItems)
+                        {
+                            status = $"skip existing p{matchingItem.Priority}";
+                            color = new Vector4(1f, 0.5f, 0.1f, 1f);
+                        }
+                        else
+                        {
+                            status = $"defer p{matchingItem.Priority}";
+                            color = new Vector4(0.2f, 1f, 0.2f, 1f);
+                        }
+                    }
+                    else if (matchingRules.Any())
+                    {
+                        var minRequiredStack = matchingRules.Min(item => item.MinStackSize);
+                        status = $"stack {stackSize}/{minRequiredStack}";
+                        color = new Vector4(1f, 0.85f, 0.2f, 1f);
+                    }
+                    else if (includeValuableUnlisted)
+                    {
+                        var fallbackItem = _apiService?.TryGetFallbackDeferItemCached(
+                            itemMatchName,
+                            stackSize,
+                            (decimal)Settings.MinExaltedValue.Value,
+                            (decimal)Settings.MinUniqueExaltedValue.Value);
+                        if (fallbackItem != null)
+                        {
+                            status = $"auto p{fallbackItem.Priority}";
+                            color = new Vector4(0.3f, 0.8f, 1f, 1f);
+                        }
+                    }
+
+                    var rect = element.GetClientRectCache;
+                    var topLeft = rect.TopLeft + windowOffset;
+                    var bottomRight = rect.BottomRight + windowOffset;
+                    var colorU32 = ImGui.ColorConvertFloat4ToU32(color);
+
+                    drawList.AddRect(topLeft, bottomRight, colorU32, 0f, ImDrawFlags.None, DebugBorderThickness);
+                    drawList.AddText(new Vector2(topLeft.X, topLeft.Y - 16f), colorU32, status);
+                }
+                catch (Exception ex)
+                {
+                    LogError($"error drawing ritual item debug overlay: {ex.Message}");
+                }
             }
         }
 
@@ -220,6 +319,14 @@ namespace RitualHelper
             return FindElementWithRerollTooltip(ritualWindow);
         }
 
+        private Element? GetStartDeferringElement()
+        {
+            var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
+            if (ritualWindow?.Children == null) return null;
+
+            return FindElementWithDeferTooltip(ritualWindow);
+        }
+
         private Element? FindElementWithRerollTooltip(Element parentElement)
         {
             if (parentElement?.Children == null) return null;
@@ -245,51 +352,92 @@ namespace RitualHelper
             return null;
         }
 
-
-
-        private bool IsDeferringEnabled()
+        private Element? FindElementWithDeferTooltip(Element parentElement)
         {
-            var deferringElement = GetDeferringElement();
-            return deferringElement == null;
+            if (parentElement?.Children == null) return null;
+
+            foreach (var element in parentElement.Children)
+            {
+                if (element.Tooltip != null &&
+                    !string.IsNullOrEmpty(element.Tooltip.Text) &&
+                    element.Tooltip.Text.ToLower().Contains("defer that item"))
+                {
+                    return element;
+                }
+
+                var result = FindElementWithDeferTooltip(element);
+                if (result != null)
+                {
+                    return result;
+                }
+            }
+
+            return null;
         }
 
-        private async Task ToggleDeferring(bool enable)
+
+
+        private async Task<bool> EnterDeferringPhase()
         {
-            // check if already in desired state
-            if ((enable && IsDeferringEnabled()) || (!enable && !IsDeferringEnabled()))
+            if (GetDeferringElement() != null)
             {
-                return;
+                return true;
             }
 
-            if (enable)
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                var startDeferringElement = GetStartDeferringElement();
+                if (startDeferringElement == null)
+                {
+                    await Task.Delay(50);
+                    continue;
+                }
+
+                await ClickElement(startDeferringElement);
+
+                var timeoutAt = DateTime.Now.AddMilliseconds(250);
+                while (DateTime.Now < timeoutAt)
+                {
+                    if (GetDeferringElement() != null)
+                    {
+                        return true;
+                    }
+
+                    await Task.Delay(25);
+                }
+
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
+            }
+
+            return GetDeferringElement() != null;
+        }
+
+        private async Task CompleteDeferringPhase()
+        {
+            var attempts = 0;
+            while (GetDeferringElement() != null && attempts < 10)
             {
                 var deferringElement = GetDeferringElement();
-                if (deferringElement != null)
+                if (deferringElement == null)
                 {
-                    await ClickElement(deferringElement);
-                    await Task.Delay(Settings.ActionDelay + RandomDelay());
-                    
-                    // verify state change and retry if needed
-                    if (!IsDeferringEnabled())
-                    {
-                        await ToggleDeferring(true);
-                    }
+                    break;
                 }
-            }
-            else
-            {
-                var cancelElement = GetCancelElement();
-                if (cancelElement != null)
+
+                await ClickElement(deferringElement);
+
+                var timeoutAt = DateTime.Now.AddMilliseconds(250);
+                while (DateTime.Now < timeoutAt)
                 {
-                    await ClickElement(cancelElement);
-                    await Task.Delay(Settings.ActionDelay + RandomDelay());
-                    
-                    // verify state change and retry if needed
-                    if (IsDeferringEnabled())
+                    if (GetDeferringElement() == null)
                     {
-                        await ToggleDeferring(false);
+                        return;
                     }
+
+                    await Task.Delay(25);
                 }
+
+                attempts++;
+                await Task.Delay(Settings.ActionDelay + RandomDelay());
             }
         }
 
@@ -299,18 +447,32 @@ namespace RitualHelper
             {
                 // clear previously deferred items list
                 _deferredItems.Clear();
+                var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value;
                 
                 var hasActiveItems = Settings.DeferGroup.GetActiveItems().Any();
-                
-                if (Settings.DeferExistingItems || hasActiveItems)
+                if (includeValuableUnlisted)
                 {
-                    await ToggleDeferring(true);
-                    await Task.Delay(Settings.ActionDelay + RandomDelay());
+                    EnsureApiServiceAvailable();
+                }
+                
+                if (Settings.DeferExistingItems || hasActiveItems || includeValuableUnlisted)
+                {
+                    var deferringPhaseReady = await EnterDeferringPhase();
+                    if (!deferringPhaseReady)
+                    {
+                        LogError("failed to enter deferring phase");
+                        return;
+                    }
                 }
 
-                if (hasActiveItems)
+                if (hasActiveItems || includeValuableUnlisted)
                 {
                     await DeferItemsByPriority();
+                }
+
+                if (GetDeferringElement() != null)
+                {
+                    await CompleteDeferringPhase();
                 }
 
                 // auto confirm if enabled
@@ -346,7 +508,8 @@ namespace RitualHelper
         private async Task DeferItemsByPriority()
         {
             var activeItems = Settings.DeferGroup.GetActiveItems();
-            if (!activeItems.Any()) return;
+            var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value && EnsureApiServiceAvailable();
+            if (!activeItems.Any() && !includeValuableUnlisted) return;
 
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
             if (ritualWindow?.Items == null) return;
@@ -361,8 +524,37 @@ namespace RitualHelper
                 try
                 {
                     var baseItemType = GameController.Files.BaseItemTypes.Translate(element.Item.Metadata);
+                    var itemMatchName = GetItemMatchName(element.Item, baseItemType.BaseName);
                     var stackSize = element.Item.GetComponent<Stack>()?.Size ?? 1;
-                    var matchingItem = activeItems.FirstOrDefault(item => item.ShouldDefer(baseItemType.BaseName, stackSize));
+                    var matchingStackCandidates = activeItems
+                        .Where(item => item.Enabled &&
+                                       !string.IsNullOrEmpty(item.Name) &&
+                                       itemMatchName.Contains(item.Name, StringComparison.OrdinalIgnoreCase) &&
+                                       (item.MinStackSize > 1 ||
+                                        itemMatchName.Contains("Chaos Orb", StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+
+                    foreach (var candidate in matchingStackCandidates)
+                    {
+                        var stackMatch = stackSize >= candidate.MinStackSize;
+                        LogMessage(
+                            $"stack debug: base='{baseItemType.BaseName}', match='{itemMatchName}', stack={stackSize}, rule='{candidate.Name}', minStack={candidate.MinStackSize}, isApi={candidate.IsApiItem?.Value}, matches={stackMatch}");
+                    }
+
+                    var matchingItem = activeItems.FirstOrDefault(item => item.ShouldDefer(itemMatchName, stackSize));
+                    if (matchingItem == null && includeValuableUnlisted && _apiService != null)
+                    {
+                        matchingItem = await _apiService.GetFallbackDeferItemAsync(
+                            itemMatchName,
+                            stackSize,
+                            (decimal)Settings.MinExaltedValue.Value,
+                            (decimal)Settings.MinUniqueExaltedValue.Value);
+                        if (matchingItem != null)
+                        {
+                            LogMessage(
+                                $"fallback match: base='{baseItemType.BaseName}', match='{itemMatchName}', stack={stackSize}, rule='{matchingItem.Name}', minStack={matchingItem.MinStackSize}, priority={matchingItem.Priority}");
+                        }
+                    }
 
                     if (matchingItem != null)
                     {
@@ -409,6 +601,108 @@ namespace RitualHelper
                 {
                     LogError($"error clicking item with priority {priority}: {ex.Message}");
                 }
+            }
+        }
+
+        private string GetItemMatchName(Entity itemEntity, string fallbackName)
+        {
+            try
+            {
+                if (itemEntity.TryGetComponent<Mods>(out var mods))
+                {
+                    var uniqueName = mods.UniqueName?.Replace('\x2019', '\x27');
+                    if (!string.IsNullOrWhiteSpace(uniqueName))
+                    {
+                        return uniqueName;
+                    }
+
+                    if (mods.ItemRarity == ItemRarity.Unique && !mods.Identified)
+                    {
+                        var artPath = itemEntity.GetComponent<RenderItem>()?.ResourcePath;
+                        if (!string.IsNullOrWhiteSpace(artPath))
+                        {
+                            var mapping = GetUniqueArtMapping();
+                            var candidate = mapping.GetValueOrDefault(artPath)?.FirstOrDefault();
+                            if (!string.IsNullOrWhiteSpace(candidate))
+                            {
+                                return candidate.Replace('\x2019', '\x27');
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return fallbackName;
+        }
+
+        private Dictionary<string, List<string>> GetUniqueArtMapping()
+        {
+            if (_uniqueArtMapping != null)
+            {
+                return _uniqueArtMapping;
+            }
+
+            try
+            {
+                GameController.Files.UniqueItemDescriptions.ReloadIfEmptyOrZero();
+
+                _uniqueArtMapping = GameController.Files.ItemVisualIdentities.EntriesList
+                    .Where(identity => identity.ArtPath != null)
+                    .GroupJoin(
+                        GameController.Files.UniqueItemDescriptions.EntriesList.Where(description => description.ItemVisualIdentity != null),
+                        identity => identity,
+                        description => description.ItemVisualIdentity,
+                        (identity, descriptions) => new { identity.ArtPath, Descriptions = descriptions.ToList() })
+                    .GroupBy(entry => entry.ArtPath, entry => entry.Descriptions)
+                    .Select(group => new
+                    {
+                        ArtPath = group.Key,
+                        Names = group.SelectMany(items => items)
+                            .Select(item => item.UniqueName?.Text)
+                            .Where(name => !string.IsNullOrWhiteSpace(name))
+                            .Distinct()
+                            .ToList()
+                    })
+                    .Where(entry => entry.Names.Any())
+                    .ToDictionary(entry => entry.ArtPath, entry => entry.Names);
+            }
+            catch (Exception ex)
+            {
+                LogError($"failed to build unique art mapping: {ex.Message}");
+                _uniqueArtMapping = new Dictionary<string, List<string>>();
+            }
+
+            return _uniqueArtMapping;
+        }
+
+        private bool EnsureApiServiceAvailable()
+        {
+            if (_apiService != null && !ShouldRecreateApiService())
+            {
+                return true;
+            }
+
+            try
+            {
+                _apiService?.Dispose();
+                _apiService = new PoE2ScoutApiService(
+                    Settings.LeagueName.Value,
+                    msg => LogMessage($"API: {msg}"),
+                    msg => LogError($"API: {msg}"),
+                    Settings.UseNinjaPricerData.Value
+                );
+
+                _lastUsedLeagueName = Settings.LeagueName.Value;
+                _lastUsedNinjaPricerData = Settings.UseNinjaPricerData.Value;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogError($"failed to initialize API service: {ex.Message}");
+                return false;
             }
         }
 
@@ -724,7 +1018,7 @@ namespace RitualHelper
                 // validate settings
                 if (!ValidateApiSettings()) return;
                 
-                LogMessage($"settings validated - League: {Settings.LeagueName.Value}, MinValue: {Settings.MinExaltedValue.Value}");
+                LogMessage($"settings validated - League: {Settings.LeagueName.Value}, MinValue: {Settings.MinExaltedValue.Value}, MinUniqueValue: {Settings.MinUniqueExaltedValue.Value}");
                 
                 // initialize or recreate API service if needed (recreate if settings changed)
                 if (_apiService == null || ShouldRecreateApiService())
@@ -743,7 +1037,9 @@ namespace RitualHelper
                 }
 
                 // fetch defer list from API
-                var apiDeferItems = await _apiService.GenerateDeferListAsync((decimal)Settings.MinExaltedValue.Value);
+                var apiDeferItems = await _apiService.GenerateDeferListAsync(
+                    (decimal)Settings.MinExaltedValue.Value,
+                    (decimal)Settings.MinUniqueExaltedValue.Value);
                 
                 if (apiDeferItems?.Any() != true)
                 {
@@ -787,6 +1083,12 @@ namespace RitualHelper
             if (Settings?.MinExaltedValue?.Value == null)
             {
                 LogError("minimum exalted value is not configured");
+                return false;
+            }
+
+            if (Settings?.MinUniqueExaltedValue?.Value == null)
+            {
+                LogError("minimum unique exalted value is not configured");
                 return false;
             }
             

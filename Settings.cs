@@ -42,6 +42,15 @@ namespace RitualHelper
         [Menu("Minimum Exalted Value", "Minimum exalted orb value to include items in defer list")]
         public RangeNode<float> MinExaltedValue { get; set; } = new(1.0f, 0.01f, 50f);
 
+        [Menu("Minimum Unique Value", "Minimum exalted orb value to include unique items in defer list")]
+        public RangeNode<float> MinUniqueExaltedValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Include Valuable Unlisted Items", "Consider ritual items above the configured value thresholds even if they are not in the accepted items list")]
+        public ToggleNode IncludeValuableUnlistedItems { get; set; } = new(false);
+
+        [Menu("Draw Debug Overlay", "Draw ritual item debug rectangles and labels")]
+        public ToggleNode DrawDebugOverlay { get; set; } = new(false);
+
         [Menu("Auto-Update Interval (minutes)", "How often to fetch new data from API")]
         public RangeNode<int> ApiUpdateInterval { get; set; } = new(30, 5, 180);
 
