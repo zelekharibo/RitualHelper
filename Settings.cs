@@ -45,6 +45,48 @@ namespace RitualHelper
         [Menu("Minimum Unique Value", "Minimum exalted orb value to include unique items in defer list")]
         public RangeNode<float> MinUniqueExaltedValue { get; set; } = new(5.0f, 0.01f, 500f);
 
+        [Menu("Unique Accessories", "Include unique accessories from API/cache")]
+        public ToggleNode IncludeUniqueAccessories { get; set; } = new(true);
+
+        [Menu("Unique Accessories Min", "Minimum exalted value for unique accessories")]
+        public RangeNode<float> MinUniqueAccessoriesValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Armour", "Include unique armour from API/cache")]
+        public ToggleNode IncludeUniqueArmour { get; set; } = new(true);
+
+        [Menu("Unique Armour Min", "Minimum exalted value for unique armour")]
+        public RangeNode<float> MinUniqueArmourValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Charms", "Include unique charms from API/cache")]
+        public ToggleNode IncludeUniqueCharms { get; set; } = new(true);
+
+        [Menu("Unique Charms Min", "Minimum exalted value for unique charms")]
+        public RangeNode<float> MinUniqueCharmsValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Flasks", "Include unique flasks from API/cache")]
+        public ToggleNode IncludeUniqueFlasks { get; set; } = new(true);
+
+        [Menu("Unique Flasks Min", "Minimum exalted value for unique flasks")]
+        public RangeNode<float> MinUniqueFlasksValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Idols", "Include unique idols from API/cache")]
+        public ToggleNode IncludeUniqueIdols { get; set; } = new(true);
+
+        [Menu("Unique Idols Min", "Minimum exalted value for unique idols")]
+        public RangeNode<float> MinUniqueIdolsValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Jewels", "Include unique jewels from API/cache")]
+        public ToggleNode IncludeUniqueJewels { get; set; } = new(true);
+
+        [Menu("Unique Jewels Min", "Minimum exalted value for unique jewels")]
+        public RangeNode<float> MinUniqueJewelsValue { get; set; } = new(5.0f, 0.01f, 500f);
+
+        [Menu("Unique Weapons", "Include unique weapons from API/cache")]
+        public ToggleNode IncludeUniqueWeapons { get; set; } = new(true);
+
+        [Menu("Unique Weapons Min", "Minimum exalted value for unique weapons")]
+        public RangeNode<float> MinUniqueWeaponsValue { get; set; } = new(5.0f, 0.01f, 500f);
+
         [Menu("Include Valuable Unlisted Items", "Consider ritual items above the configured value thresholds even if they are not in the accepted items list")]
         public ToggleNode IncludeValuableUnlistedItems { get; set; } = new(false);
 
@@ -60,5 +102,34 @@ namespace RitualHelper
         public string LastApiUpdateTime { get; set; } = string.Empty;
 
         public DeferGroup DeferGroup { get; set; } = new();
+
+        public Dictionary<string, decimal> GetEnabledUniqueCategoryThresholds()
+        {
+            var thresholds = new Dictionary<string, decimal>();
+
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueAccessories, MinUniqueAccessoriesValue, "accessory");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueArmour, MinUniqueArmourValue, "armour");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueCharms, MinUniqueCharmsValue, "charm");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueFlasks, MinUniqueFlasksValue, "flask");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueIdols, MinUniqueIdolsValue, "idol");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueJewels, MinUniqueJewelsValue, "jewel");
+            AddUniqueCategoryThreshold(thresholds, IncludeUniqueWeapons, MinUniqueWeaponsValue, "weapon");
+
+            return thresholds;
+        }
+
+        private static void AddUniqueCategoryThreshold(
+            IDictionary<string, decimal> thresholds,
+            ToggleNode? enabledNode,
+            RangeNode<float>? minValueNode,
+            string categoryApiId)
+        {
+            if (enabledNode?.Value != true || minValueNode == null)
+            {
+                return;
+            }
+
+            thresholds[categoryApiId] = (decimal)minValueNode.Value;
+        }
     }
 }

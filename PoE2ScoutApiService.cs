@@ -172,7 +172,10 @@ namespace RitualHelper
             }
         }
 
-        public async Task<List<DeferItem>> GenerateDeferListAsync(decimal minExaltedValue = 0.1m, decimal minUniqueExaltedValue = 1m)
+        public async Task<List<DeferItem>> GenerateDeferListAsync(
+            decimal minExaltedValue = 0.1m,
+            decimal minUniqueExaltedValue = 1m,
+            IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
             var deferItems = new List<DeferItem>();
 
@@ -185,7 +188,7 @@ namespace RitualHelper
                 
                 var valuableCurrency = FilterStackableItems(currencyData);
                 var valuableOmens = FilterStackableItems(omenData);
-                var valuableUniques = FilterValuableItems(uniqueData, minUniqueExaltedValue);
+                var valuableUniques = FilterUniqueItems(uniqueData, minUniqueExaltedValue, uniqueCategoryThresholds);
 
                 // convert to defer items with API prefix
                 AddItemsToDefer(deferItems, valuableCurrency, minExaltedValue, true);
@@ -205,13 +208,28 @@ namespace RitualHelper
             }
         }
 
-        public async Task<DeferItem?> GetFallbackDeferItemAsync(string itemBaseName, int stackSize, decimal minExaltedValue, decimal minUniqueExaltedValue)
+        public async Task<DeferItem?> GetFallbackDeferItemAsync(
+            string itemBaseName,
+            int stackSize,
+            decimal minExaltedValue,
+            decimal minUniqueExaltedValue,
+            IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
             await EnsureAllDataLoadedAsync();
-            return TryGetFallbackDeferItemCached(itemBaseName, stackSize, minExaltedValue, minUniqueExaltedValue);
+            return TryGetFallbackDeferItemCached(
+                itemBaseName,
+                stackSize,
+                minExaltedValue,
+                minUniqueExaltedValue,
+                uniqueCategoryThresholds);
         }
 
-        public DeferItem? TryGetFallbackDeferItemCached(string itemBaseName, int stackSize, decimal minExaltedValue, decimal minUniqueExaltedValue)
+        public DeferItem? TryGetFallbackDeferItemCached(
+            string itemBaseName,
+            int stackSize,
+            decimal minExaltedValue,
+            decimal minUniqueExaltedValue,
+            IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
             var stackableMatch = FindFallbackMatch(_cachedCurrency, itemBaseName);
             stackableMatch ??= FindFallbackMatch(_cachedOmens, itemBaseName);
@@ -230,7 +248,9 @@ namespace RitualHelper
             }
 
             var uniqueMatch = FindFallbackMatch(_cachedUniques, itemBaseName);
-            if (uniqueMatch != null && (uniqueMatch.ForceInclude || uniqueMatch.GetExaltedValue() >= minUniqueExaltedValue))
+            if (uniqueMatch != null &&
+                TryGetUniqueMinimumValue(uniqueMatch, minUniqueExaltedValue, uniqueCategoryThresholds, out var uniqueMinValue) &&
+                (uniqueMatch.ForceInclude || uniqueMatch.GetExaltedValue() >= uniqueMinValue))
             {
                 return new DeferItem(
                     NormalizeApiItemNameForMatching(uniqueMatch.GetName()),
@@ -259,9 +279,7 @@ namespace RitualHelper
                 "Flasks",
                 "Idols",
                 "Jewels",
-                "Maps",
-                "Weapons",
-                "SanctumRelics"
+                "Weapons"
             };
 
             var allItems = new List<PoE2ScoutItem>();
@@ -441,9 +459,7 @@ namespace RitualHelper
                 "armour",
                 "flask",
                 "jewel",
-                "map",
-                "weapon",
-                "sanctum"
+                "weapon"
             };
 
             return _cachedUniqueCategoryApiIds;
@@ -721,6 +737,8 @@ namespace RitualHelper
                 "belt" => "accessory",
                 "ring" => "accessory",
                 "amulet" => "accessory",
+                "accessories" => "accessory",
+                "accessory" => "accessory",
                 "focus" => "weapon",
                 "crossbow" => "weapon",
                 "bow" => "weapon",
@@ -737,6 +755,21 @@ namespace RitualHelper
                 "gloves" => "armour",
                 "boots" => "armour",
                 "shield" => "armour",
+                "armours" => "armour",
+                "armour" => "armour",
+                "charms" => "charm",
+                "charm" => "charm",
+                "flasks" => "flask",
+                "flask" => "flask",
+                "idols" => "idol",
+                "idol" => "idol",
+                "jewels" => "jewel",
+                "jewel" => "jewel",
+                "maps" => "map",
+                "map" => "map",
+                "weapons" => "weapon",
+                "weapon" => "weapon",
+                "sanctumrelics" => "sanctum",
                 "sanctumrelic" => "sanctum",
                 _ => category.Replace(" ", string.Empty).ToLowerInvariant()
             };
@@ -902,6 +935,20 @@ namespace RitualHelper
                 .ToList();
         }
 
+        private static List<PoE2ScoutItem> FilterUniqueItems(
+            List<PoE2ScoutItem> items,
+            decimal defaultMinValue,
+            IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds)
+        {
+            return items
+                .Where(item =>
+                    item != null &&
+                    TryGetUniqueMinimumValue(item, defaultMinValue, uniqueCategoryThresholds, out var minValue) &&
+                    (item.ForceInclude || item.GetExaltedValue() >= minValue))
+                .OrderByDescending(item => item.GetExaltedValue())
+                .ToList();
+        }
+
         private static List<PoE2ScoutItem> FilterStackableItems(List<PoE2ScoutItem> items)
         {
             return items
@@ -932,6 +979,27 @@ namespace RitualHelper
         private static string NormalizeApiItemNameForMatching(string itemName)
         {
             return itemName;
+        }
+
+        private static bool TryGetUniqueMinimumValue(
+            PoE2ScoutItem item,
+            decimal defaultMinValue,
+            IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds,
+            out decimal minValue)
+        {
+            minValue = defaultMinValue;
+            if (item == null)
+            {
+                return false;
+            }
+
+            if (uniqueCategoryThresholds == null || uniqueCategoryThresholds.Count == 0)
+            {
+                return true;
+            }
+
+            var normalizedCategory = NormalizeUniqueCategoryApiId(item.CategoryApiId);
+            return uniqueCategoryThresholds.TryGetValue(normalizedCategory, out minValue);
         }
 
         private static int CalculateMinimumStackSize(PoE2ScoutItem item, decimal minValue)
@@ -967,6 +1035,34 @@ namespace RitualHelper
                 item != null &&
                 !string.IsNullOrEmpty(item.GetName()) &&
                 itemBaseName.Contains(NormalizeApiItemNameForMatching(item.GetName()), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string NormalizeUniqueCategoryApiId(string? categoryApiId)
+        {
+            return categoryApiId?.Replace(" ", string.Empty).ToLowerInvariant() switch
+            {
+                "accessories" => "accessory",
+                "accessory" => "accessory",
+                "armours" => "armour",
+                "armour" => "armour",
+                "charms" => "charm",
+                "charm" => "charm",
+                "flasks" => "flask",
+                "flask" => "flask",
+                "idols" => "idol",
+                "idol" => "idol",
+                "jewels" => "jewel",
+                "jewel" => "jewel",
+                "maps" => "map",
+                "map" => "map",
+                "sanctumrelics" => "sanctum",
+                "sanctumrelic" => "sanctum",
+                "sanctumresearch" => "sanctum",
+                "sanctum" => "sanctum",
+                "weapons" => "weapon",
+                "weapon" => "weapon",
+                _ => categoryApiId?.Replace(" ", string.Empty).ToLowerInvariant() ?? string.Empty
+            };
         }
         
         private string BuildApiUrl(string category, int page)

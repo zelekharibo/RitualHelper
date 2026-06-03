@@ -204,11 +204,13 @@ namespace RitualHelper
                     }
                     else if (includeValuableUnlisted)
                     {
+                        var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
                         var fallbackItem = _apiService?.TryGetFallbackDeferItemCached(
                             itemMatchName,
                             stackSize,
                             (decimal)Settings.MinExaltedValue.Value,
-                            (decimal)Settings.MinUniqueExaltedValue.Value);
+                            (decimal)Settings.MinUniqueExaltedValue.Value,
+                            uniqueCategoryThresholds);
                         if (fallbackItem != null)
                         {
                             status = $"auto p{fallbackItem.Priority}";
@@ -511,6 +513,7 @@ namespace RitualHelper
         {
             var activeItems = Settings.DeferGroup.GetActiveItems();
             var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value && EnsureApiServiceAvailable();
+            var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
             if (!activeItems.Any() && !includeValuableUnlisted) return;
 
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
@@ -550,7 +553,8 @@ namespace RitualHelper
                             itemMatchName,
                             stackSize,
                             (decimal)Settings.MinExaltedValue.Value,
-                            (decimal)Settings.MinUniqueExaltedValue.Value);
+                            (decimal)Settings.MinUniqueExaltedValue.Value,
+                            uniqueCategoryThresholds);
                         if (matchingItem != null)
                         {
                             LogMessage(
@@ -1021,6 +1025,7 @@ namespace RitualHelper
                 if (!ValidateApiSettings()) return;
                 
                 LogMessage($"settings validated - League: {Settings.LeagueName.Value}, MinValue: {Settings.MinExaltedValue.Value}, MinUniqueValue: {Settings.MinUniqueExaltedValue.Value}");
+                var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
                 
                 // initialize or recreate API service if needed (recreate if settings changed)
                 if (_apiService == null || ShouldRecreateApiService())
@@ -1041,7 +1046,8 @@ namespace RitualHelper
                 // fetch defer list from API
                 var apiDeferItems = await _apiService.GenerateDeferListAsync(
                     (decimal)Settings.MinExaltedValue.Value,
-                    (decimal)Settings.MinUniqueExaltedValue.Value);
+                    (decimal)Settings.MinUniqueExaltedValue.Value,
+                    uniqueCategoryThresholds);
                 
                 if (apiDeferItems?.Any() != true)
                 {
