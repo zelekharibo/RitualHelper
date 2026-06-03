@@ -301,6 +301,12 @@ namespace RitualHelper
                 var items = await LoadDataFromNinjaPricerCache(fileName);
                 if (items.Any())
                 {
+                    var categoryApiId = NormalizeUniqueCategoryApiId(fileName);
+                    foreach (var item in items)
+                    {
+                        item.CategoryApiId = categoryApiId;
+                    }
+
                     allItems.AddRange(items);
                 }
             }
@@ -744,14 +750,22 @@ namespace RitualHelper
                 return string.Empty;
             }
 
-            return category.Replace(" ", string.Empty).ToLowerInvariant() switch
+            var normalizedCategory = category.Replace(" ", string.Empty).ToLowerInvariant();
+            var bracketStart = normalizedCategory.IndexOf('[');
+            var bracketEnd = normalizedCategory.IndexOf(']');
+            if (bracketStart >= 0 && bracketEnd > bracketStart)
+            {
+                normalizedCategory = normalizedCategory.Substring(bracketStart + 1, bracketEnd - bracketStart - 1);
+            }
+
+            return normalizedCategory switch
             {
                 "belt" => "accessory",
                 "ring" => "accessory",
                 "amulet" => "accessory",
                 "accessories" => "accessory",
                 "accessory" => "accessory",
-                "focus" => "weapon",
+                "focus" => "armour",
                 "crossbow" => "weapon",
                 "bow" => "weapon",
                 "wand" => "weapon",
@@ -783,7 +797,7 @@ namespace RitualHelper
                 "weapon" => "weapon",
                 "sanctumrelics" => "sanctum",
                 "sanctumrelic" => "sanctum",
-                _ => category.Replace(" ", string.Empty).ToLowerInvariant()
+                _ => normalizedCategory
             };
         }
 
