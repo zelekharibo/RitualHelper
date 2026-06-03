@@ -173,8 +173,8 @@ namespace RitualHelper
         }
 
         public async Task<List<DeferItem>> GenerateDeferListAsync(
-            decimal minExaltedValue = 0.1m,
-            decimal minUniqueExaltedValue = 1m,
+            decimal? minCurrencyValue = null,
+            decimal? minRitualValue = null,
             IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
             var deferItems = new List<DeferItem>();
@@ -186,13 +186,13 @@ namespace RitualHelper
                 var omenData = await GetRitualOmensAsync();
                 var uniqueData = await GetUniqueItemsAsync();
                 
-                var valuableCurrency = FilterStackableItems(currencyData);
-                var valuableOmens = FilterStackableItems(omenData);
-                var valuableUniques = FilterUniqueItems(uniqueData, minUniqueExaltedValue, uniqueCategoryThresholds);
+                var valuableCurrency = FilterStackableItems(currencyData, minCurrencyValue);
+                var valuableOmens = FilterStackableItems(omenData, minRitualValue);
+                var valuableUniques = FilterUniqueItems(uniqueData, uniqueCategoryThresholds);
 
                 // convert to defer items with API prefix
-                AddItemsToDefer(deferItems, valuableCurrency, minExaltedValue, true);
-                AddItemsToDefer(deferItems, valuableOmens, minExaltedValue, true);
+                AddItemsToDefer(deferItems, valuableCurrency, minCurrencyValue, true);
+                AddItemsToDefer(deferItems, valuableOmens, minRitualValue, true);
                 AddItemsToDefer(deferItems, valuableUniques);
 
                 _logInfo($"Generated {deferItems.Count} defer items from API data");
@@ -211,37 +211,49 @@ namespace RitualHelper
         public async Task<DeferItem?> GetFallbackDeferItemAsync(
             string itemBaseName,
             int stackSize,
-            decimal minExaltedValue,
-            decimal minUniqueExaltedValue,
+            decimal? minCurrencyValue,
+            decimal? minRitualValue,
             IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
             await EnsureAllDataLoadedAsync();
             return TryGetFallbackDeferItemCached(
                 itemBaseName,
                 stackSize,
-                minExaltedValue,
-                minUniqueExaltedValue,
+                minCurrencyValue,
+                minRitualValue,
                 uniqueCategoryThresholds);
         }
 
         public DeferItem? TryGetFallbackDeferItemCached(
             string itemBaseName,
             int stackSize,
-            decimal minExaltedValue,
-            decimal minUniqueExaltedValue,
+            decimal? minCurrencyValue,
+            decimal? minRitualValue,
             IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds = null)
         {
-            var stackableMatch = FindFallbackMatch(_cachedCurrency, itemBaseName);
-            stackableMatch ??= FindFallbackMatch(_cachedOmens, itemBaseName);
-
-            if (stackableMatch != null)
+            var currencyMatch = FindFallbackMatch(_cachedCurrency, itemBaseName);
+            if (currencyMatch != null && minCurrencyValue.HasValue)
             {
-                var minStackSize = CalculateMinimumStackSize(stackableMatch, minExaltedValue);
-                if (stackableMatch.ForceInclude || stackSize >= minStackSize)
+                var minStackSize = CalculateMinimumStackSize(currencyMatch, minCurrencyValue.Value);
+                if (currencyMatch.ForceInclude || stackSize >= minStackSize)
                 {
                     return new DeferItem(
-                        NormalizeApiItemNameForMatching(stackableMatch.GetName()),
-                        CalculatePriority(stackableMatch.GetExaltedValue()),
+                        NormalizeApiItemNameForMatching(currencyMatch.GetName()),
+                        CalculatePriority(currencyMatch.GetExaltedValue()),
+                        minStackSize,
+                        true);
+                }
+            }
+
+            var ritualMatch = FindFallbackMatch(_cachedOmens, itemBaseName);
+            if (ritualMatch != null && minRitualValue.HasValue)
+            {
+                var minStackSize = CalculateMinimumStackSize(ritualMatch, minRitualValue.Value);
+                if (ritualMatch.ForceInclude || stackSize >= minStackSize)
+                {
+                    return new DeferItem(
+                        NormalizeApiItemNameForMatching(ritualMatch.GetName()),
+                        CalculatePriority(ritualMatch.GetExaltedValue()),
                         minStackSize,
                         true);
                 }
@@ -249,7 +261,7 @@ namespace RitualHelper
 
             var uniqueMatch = FindFallbackMatch(_cachedUniques, itemBaseName);
             if (uniqueMatch != null &&
-                TryGetUniqueMinimumValue(uniqueMatch, minUniqueExaltedValue, uniqueCategoryThresholds, out var uniqueMinValue) &&
+                TryGetUniqueMinimumValue(uniqueMatch, uniqueCategoryThresholds, out var uniqueMinValue) &&
                 (uniqueMatch.ForceInclude || uniqueMatch.GetExaltedValue() >= uniqueMinValue))
             {
                 return new DeferItem(
@@ -937,20 +949,24 @@ namespace RitualHelper
 
         private static List<PoE2ScoutItem> FilterUniqueItems(
             List<PoE2ScoutItem> items,
-            decimal defaultMinValue,
             IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds)
         {
             return items
                 .Where(item =>
                     item != null &&
-                    TryGetUniqueMinimumValue(item, defaultMinValue, uniqueCategoryThresholds, out var minValue) &&
+                    TryGetUniqueMinimumValue(item, uniqueCategoryThresholds, out var minValue) &&
                     (item.ForceInclude || item.GetExaltedValue() >= minValue))
                 .OrderByDescending(item => item.GetExaltedValue())
                 .ToList();
         }
 
-        private static List<PoE2ScoutItem> FilterStackableItems(List<PoE2ScoutItem> items)
+        private static List<PoE2ScoutItem> FilterStackableItems(List<PoE2ScoutItem> items, decimal? minValue)
         {
+            if (!minValue.HasValue)
+            {
+                return new List<PoE2ScoutItem>();
+            }
+
             return items
                 .Where(item => item != null && (item.ForceInclude || item.GetExaltedValue() > 0))
                 .OrderByDescending(item => item.GetExaltedValue())
@@ -966,12 +982,17 @@ namespace RitualHelper
             }
         }
 
-        private static void AddItemsToDefer(List<DeferItem> deferItems, List<PoE2ScoutItem> apiItems, decimal minValue, bool useStackValue)
+        private static void AddItemsToDefer(List<DeferItem> deferItems, List<PoE2ScoutItem> apiItems, decimal? minValue, bool useStackValue)
         {
+            if (!minValue.HasValue)
+            {
+                return;
+            }
+
             foreach (var item in apiItems.Where(i => i != null && !string.IsNullOrEmpty(i.GetName())))
             {
                 var priority = CalculatePriority(item.GetExaltedValue());
-                var minStackSize = useStackValue ? CalculateMinimumStackSize(item, minValue) : 1;
+                var minStackSize = useStackValue ? CalculateMinimumStackSize(item, minValue.Value) : 1;
                 deferItems.Add(new DeferItem(NormalizeApiItemNameForMatching(item.GetName()), priority, minStackSize, true));
             }
         }
@@ -983,11 +1004,10 @@ namespace RitualHelper
 
         private static bool TryGetUniqueMinimumValue(
             PoE2ScoutItem item,
-            decimal defaultMinValue,
             IReadOnlyDictionary<string, decimal>? uniqueCategoryThresholds,
             out decimal minValue)
         {
-            minValue = defaultMinValue;
+            minValue = 0m;
             if (item == null)
             {
                 return false;
@@ -995,7 +1015,7 @@ namespace RitualHelper
 
             if (uniqueCategoryThresholds == null || uniqueCategoryThresholds.Count == 0)
             {
-                return true;
+                return false;
             }
 
             var normalizedCategory = NormalizeUniqueCategoryApiId(item.CategoryApiId);

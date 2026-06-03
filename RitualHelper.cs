@@ -63,8 +63,8 @@ namespace RitualHelper
 
         public override void DrawSettings()
         {
-            base.DrawSettings();
-            
+            DrawGeneralSettings();
+
             ImGui.Separator();
             ImGui.Text("API Integration");
             
@@ -84,7 +84,8 @@ namespace RitualHelper
                     ? "Never updated" 
                     : $"Last updated: {_lastApiUpdate:HH:mm:ss}";
                 ImGui.Text(lastUpdateText);
-                
+
+                DrawUniqueCategorySettingsTable();
             }
             
             ImGui.Separator();
@@ -92,6 +93,121 @@ namespace RitualHelper
             
             // defer group settings
             Settings.DeferGroup.DrawSettings();
+        }
+
+        private void DrawGeneralSettings()
+        {
+            DrawToggleSetting("Enable", Settings.Enable);
+            DrawIntSliderSetting("Action Delay (ms)", Settings.ActionDelay);
+            DrawIntSliderSetting("Random Delay (ms)", Settings.RandomDelay);
+            DrawToggleSetting("Cancel With Right Mouse Button", Settings.CancelWithRightClick);
+            DrawToggleSetting("Defer existing items", Settings.DeferExistingItems);
+            DrawToggleSetting("Auto Confirm", Settings.AutoConfirm);
+            DrawToggleSetting("Auto Pickup", Settings.AutoPickup);
+            DrawToggleSetting("Auto Reroll", Settings.AutoReroll);
+            DrawToggleSetting("Enable API Integration", Settings.EnableApiIntegration);
+            DrawToggleSetting("Use NinjaPricer Data", Settings.UseNinjaPricerData);
+            DrawTextSetting("League Name", Settings.LeagueName, 128);
+            DrawToggleSetting("Include Valuable Unlisted Items", Settings.IncludeValuableUnlistedItems);
+            DrawToggleSetting("Draw Debug Overlay", Settings.DrawDebugOverlay);
+            DrawIntSliderSetting("Auto-Update Interval (minutes)", Settings.ApiUpdateInterval);
+            DrawToggleSetting("Replace Manual Items", Settings.ReplaceManualItems);
+        }
+
+        private void DrawUniqueCategorySettingsTable()
+        {
+            ImGui.Separator();
+            ImGui.Text("Category Filters");
+
+            if (!ImGui.BeginTable("UniqueCategoryFilters", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchSame))
+            {
+                return;
+            }
+
+            ImGui.TableSetupColumn("Category");
+            ImGui.TableSetupColumn("Use");
+            ImGui.TableSetupColumn("Min Ex");
+            ImGui.TableHeadersRow();
+
+            DrawUniqueCategoryRow("Currency", Settings.IncludeCurrencyItems, Settings.MinCurrencyValue);
+            DrawUniqueCategoryRow("Ritual", Settings.IncludeRitualItems, Settings.MinRitualValue);
+            DrawUniqueCategoryRow("Accessories", Settings.IncludeUniqueAccessories, Settings.MinUniqueAccessoriesValue);
+            DrawUniqueCategoryRow("Armour", Settings.IncludeUniqueArmour, Settings.MinUniqueArmourValue);
+            DrawUniqueCategoryRow("Charms", Settings.IncludeUniqueCharms, Settings.MinUniqueCharmsValue);
+            DrawUniqueCategoryRow("Flasks", Settings.IncludeUniqueFlasks, Settings.MinUniqueFlasksValue);
+            DrawUniqueCategoryRow("Idols", Settings.IncludeUniqueIdols, Settings.MinUniqueIdolsValue);
+            DrawUniqueCategoryRow("Jewels", Settings.IncludeUniqueJewels, Settings.MinUniqueJewelsValue);
+            DrawUniqueCategoryRow("Weapons", Settings.IncludeUniqueWeapons, Settings.MinUniqueWeaponsValue);
+
+            ImGui.EndTable();
+        }
+
+        private static void DrawUniqueCategoryRow(string label, ExileCore2.Shared.Nodes.ToggleNode enabledNode, ExileCore2.Shared.Nodes.RangeNode<float> minValueNode)
+        {
+            ImGui.TableNextRow();
+
+            ImGui.TableSetColumnIndex(0);
+            ImGui.TextUnformatted(label);
+
+            ImGui.TableSetColumnIndex(1);
+            var enabled = enabledNode.Value;
+            if (ImGui.Checkbox($"##unique_enabled_{label}", ref enabled))
+            {
+                enabledNode.Value = enabled;
+            }
+
+            ImGui.TableSetColumnIndex(2);
+            if (!enabledNode.Value)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            var minValue = minValueNode.Value;
+            if (ImGui.DragFloat($"##unique_min_{label}", ref minValue, 0.1f, minValueNode.Min, minValueNode.Max, "%.2f"))
+            {
+                minValueNode.Value = Math.Clamp(minValue, minValueNode.Min, minValueNode.Max);
+            }
+
+            if (!enabledNode.Value)
+            {
+                ImGui.EndDisabled();
+            }
+        }
+
+        private static void DrawToggleSetting(string label, ExileCore2.Shared.Nodes.ToggleNode node)
+        {
+            var value = node.Value;
+            if (ImGui.Checkbox(label, ref value))
+            {
+                node.Value = value;
+            }
+        }
+
+        private static void DrawIntSliderSetting(string label, ExileCore2.Shared.Nodes.RangeNode<int> node)
+        {
+            var value = node.Value;
+            if (ImGui.SliderInt(label, ref value, node.Min, node.Max))
+            {
+                node.Value = value;
+            }
+        }
+
+        private static void DrawFloatSliderSetting(string label, ExileCore2.Shared.Nodes.RangeNode<float> node)
+        {
+            var value = node.Value;
+            if (ImGui.SliderFloat(label, ref value, node.Min, node.Max, "%.2f"))
+            {
+                node.Value = value;
+            }
+        }
+
+        private static void DrawTextSetting(string label, ExileCore2.Shared.Nodes.TextNode node, uint maxLength)
+        {
+            var value = node.Value ?? string.Empty;
+            if (ImGui.InputText(label, ref value, maxLength))
+            {
+                node.Value = value;
+            }
         }
 
 
@@ -205,11 +321,13 @@ namespace RitualHelper
                     else if (includeValuableUnlisted)
                     {
                         var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
+                        var minCurrencyValue = Settings.TryGetStackableCategoryThreshold("currency", out var currencyValue) ? currencyValue : (decimal?)null;
+                        var minRitualValue = Settings.TryGetStackableCategoryThreshold("ritual", out var ritualValue) ? ritualValue : (decimal?)null;
                         var fallbackItem = _apiService?.TryGetFallbackDeferItemCached(
                             itemMatchName,
                             stackSize,
-                            (decimal)Settings.MinExaltedValue.Value,
-                            (decimal)Settings.MinUniqueExaltedValue.Value,
+                            minCurrencyValue,
+                            minRitualValue,
                             uniqueCategoryThresholds);
                         if (fallbackItem != null)
                         {
@@ -514,6 +632,8 @@ namespace RitualHelper
             var activeItems = Settings.DeferGroup.GetActiveItems();
             var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value && EnsureApiServiceAvailable();
             var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
+            var minCurrencyValue = Settings.TryGetStackableCategoryThreshold("currency", out var currencyValue) ? currencyValue : (decimal?)null;
+            var minRitualValue = Settings.TryGetStackableCategoryThreshold("ritual", out var ritualValue) ? ritualValue : (decimal?)null;
             if (!activeItems.Any() && !includeValuableUnlisted) return;
 
             var ritualWindow = GameController.IngameState.IngameUi.RitualWindow;
@@ -552,8 +672,8 @@ namespace RitualHelper
                         matchingItem = await _apiService.GetFallbackDeferItemAsync(
                             itemMatchName,
                             stackSize,
-                            (decimal)Settings.MinExaltedValue.Value,
-                            (decimal)Settings.MinUniqueExaltedValue.Value,
+                            minCurrencyValue,
+                            minRitualValue,
                             uniqueCategoryThresholds);
                         if (matchingItem != null)
                         {
@@ -1024,7 +1144,9 @@ namespace RitualHelper
                 // validate settings
                 if (!ValidateApiSettings()) return;
                 
-                LogMessage($"settings validated - League: {Settings.LeagueName.Value}, MinValue: {Settings.MinExaltedValue.Value}, MinUniqueValue: {Settings.MinUniqueExaltedValue.Value}");
+                var minCurrencyValue = Settings.TryGetStackableCategoryThreshold("currency", out var currencyValue) ? currencyValue : (decimal?)null;
+                var minRitualValue = Settings.TryGetStackableCategoryThreshold("ritual", out var ritualValue) ? ritualValue : (decimal?)null;
+                LogMessage($"settings validated - League: {Settings.LeagueName.Value}, CurrencyMin: {minCurrencyValue?.ToString() ?? "off"}, RitualMin: {minRitualValue?.ToString() ?? "off"}");
                 var uniqueCategoryThresholds = Settings.GetEnabledUniqueCategoryThresholds();
                 
                 // initialize or recreate API service if needed (recreate if settings changed)
@@ -1045,8 +1167,8 @@ namespace RitualHelper
 
                 // fetch defer list from API
                 var apiDeferItems = await _apiService.GenerateDeferListAsync(
-                    (decimal)Settings.MinExaltedValue.Value,
-                    (decimal)Settings.MinUniqueExaltedValue.Value,
+                    minCurrencyValue,
+                    minRitualValue,
                     uniqueCategoryThresholds);
                 
                 if (apiDeferItems?.Any() != true)
@@ -1088,18 +1210,6 @@ namespace RitualHelper
                 return false;
             }
                 
-            if (Settings?.MinExaltedValue?.Value == null)
-            {
-                LogError("minimum exalted value is not configured");
-                return false;
-            }
-
-            if (Settings?.MinUniqueExaltedValue?.Value == null)
-            {
-                LogError("minimum unique exalted value is not configured");
-                return false;
-            }
-            
             return true;
         }
 
