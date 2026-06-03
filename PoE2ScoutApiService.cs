@@ -255,7 +255,9 @@ namespace RitualHelper
             {
                 "Accessories",
                 "Armour",
+                "Charms",
                 "Flasks",
+                "Idols",
                 "Jewels",
                 "Maps",
                 "Weapons",

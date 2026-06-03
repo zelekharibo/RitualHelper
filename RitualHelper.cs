@@ -22,6 +22,7 @@ namespace RitualHelper
         private const float ButtonOffset = 20f;
         private const float DebugBorderThickness = 2f;
         private const float ButtonSize = 37f;
+        private const int StartActionDelayMs = 100;
         private const string ImageName = "pick.png";
         
         private static readonly Random StaticRandom = new();
@@ -447,6 +448,7 @@ namespace RitualHelper
             {
                 // clear previously deferred items list
                 _deferredItems.Clear();
+                await Task.Delay(StartActionDelayMs);
                 var includeValuableUnlisted = Settings.IncludeValuableUnlistedItems.Value;
                 
                 var hasActiveItems = Settings.DeferGroup.GetActiveItems().Any();
