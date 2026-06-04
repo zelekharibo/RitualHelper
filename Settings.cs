@@ -30,15 +30,6 @@ namespace RitualHelper
         [Menu("Auto Reroll", "Automatically click reroll button after confirm/pickup (requires Auto Confirm)")]
         public ToggleNode AutoReroll { get; set; } = new(false);
 
-        [Menu("Enable API Integration", "Auto-populate defer list from PoE2 Scout API")]
-        public ToggleNode EnableApiIntegration { get; set; } = new(false);
-
-        [Menu("Use NinjaPricer Data", "Read data from NinjaPricer cache instead of making API calls")]
-        public ToggleNode UseNinjaPricerData { get; set; } = new(false);
-
-        [Menu("League Name", "Current PoE2 league name for API requests")]
-        public TextNode LeagueName { get; set; } = new("Rise of the Abyssal");
-
         public ToggleNode IncludeCurrencyItems { get; set; } = new(true);
 
         public RangeNode<float> MinCurrencyValue { get; set; } = new(1.0f, 0.01f, 50f);
@@ -75,19 +66,8 @@ namespace RitualHelper
 
         public RangeNode<float> MinUniqueWeaponsValue { get; set; } = new(5.0f, 0.01f, 500f);
 
-        [Menu("Include Valuable Unlisted Items", "Consider ritual items above the configured value thresholds even if they are not in the accepted items list")]
-        public ToggleNode IncludeValuableUnlistedItems { get; set; } = new(false);
-
         [Menu("Draw Debug Overlay", "Draw ritual item debug rectangles and labels")]
         public ToggleNode DrawDebugOverlay { get; set; } = new(false);
-
-        [Menu("Auto-Update Interval (minutes)", "How often to fetch new data from API")]
-        public RangeNode<int> ApiUpdateInterval { get; set; } = new(30, 5, 180);
-
-        [Menu("Replace Manual Items", "Replace manually configured items with API data")]
-        public ToggleNode ReplaceManualItems { get; set; } = new(false);
-
-        public string LastApiUpdateTime { get; set; } = string.Empty;
 
         public DeferGroup DeferGroup { get; set; } = new();
 
@@ -116,6 +96,19 @@ namespace RitualHelper
                 "ritual" when IncludeRitualItems.Value => TryGetRangeValue(MinRitualValue, out minValue),
                 _ => false
             };
+        }
+
+        public bool HasAnyAutomaticPricingRuleEnabled()
+        {
+            return IncludeCurrencyItems.Value ||
+                   IncludeRitualItems.Value ||
+                   IncludeUniqueAccessories.Value ||
+                   IncludeUniqueArmour.Value ||
+                   IncludeUniqueCharms.Value ||
+                   IncludeUniqueFlasks.Value ||
+                   IncludeUniqueIdols.Value ||
+                   IncludeUniqueJewels.Value ||
+                   IncludeUniqueWeapons.Value;
         }
 
         private static void AddUniqueCategoryThreshold(

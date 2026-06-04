@@ -108,13 +108,25 @@ namespace RitualHelper
 
         private void DrawItemList()
         {
+            var items = Items;
+            if (items == null)
+            {
+                return;
+            }
+
             // create a copy of the items list to avoid concurrent modification issues
-            var itemsCopy = Items?.ToList() ?? new List<DeferItem>();
+            var itemsCopy = items.ToList();
             
             for (var i = 0; i < itemsCopy.Count; i++)
             {
                 // double-check that the item still exists in the original list
-                if (i >= Items.Count || Items[i] != itemsCopy[i])
+                if (i >= items.Count)
+                {
+                    break; // list was modified, stop rendering
+                }
+
+                var currentItem = items[i];
+                if (currentItem == null || !ReferenceEquals(currentItem, itemsCopy[i]))
                 {
                     break; // list was modified, stop rendering
                 }
@@ -131,9 +143,9 @@ namespace RitualHelper
                     DrawItemControls(i);
                     
                     // additional safety check before accessing Items[i]
-                    if (i < Items.Count && Items[i] != null)
+                    if (i < items.Count && items[i] != null)
                     {
-                        Items[i].Display(_expand);
+                        items[i].Display(_expand);
                     }
                 }
                 finally
@@ -207,7 +219,7 @@ namespace RitualHelper
             }
 
             var deleteResult = ImGuiExt.DrawDeleteConfirmationPopup(
-                "DeferItemDeleteConfirmation", itemName);
+                "DeferItemDeleteConfirmation", itemName ?? string.Empty);
                 
             if (deleteResult == true)
             {

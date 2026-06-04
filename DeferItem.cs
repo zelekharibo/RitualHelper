@@ -104,7 +104,7 @@ namespace RitualHelper
         {
             if (IsApiItem?.Value == true)
             {
-                ImGui.TextColored(Color.LightBlue.ToVector4(), "[API]");
+                ImGui.TextColored(Color.LightBlue.ToVector4(), "[AUTO]");
                 ImGui.SameLine();
             }
             ImGui.Text(name);
@@ -140,15 +140,15 @@ namespace RitualHelper
                 ImGui.SetTooltip("only defer if stack size is at least this amount");
             }
             
-            // API item toggle
+            // legacy auto-managed marker
             var isApiValue = IsApiItem.Value;
-            if (ImGui.Checkbox("From API", ref isApiValue))
+            if (ImGui.Checkbox("Auto-managed", ref isApiValue))
             {
                 IsApiItem.Value = isApiValue;
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("indicates if this item was added from API data");
+                ImGui.SetTooltip("indicates if this item was added automatically by an integration");
             }
             
             ImGui.Unindent();

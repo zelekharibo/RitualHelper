@@ -29,7 +29,6 @@
 
   <ItemGroup>
     <PackageReference Include="ImGui.NET" Version="1.90.0.1" />
-    <PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

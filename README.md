@@ -1,54 +1,49 @@
 # RitualHelper
 
-A Path of Exile 2 plugin for ExileCore2 that automates ritual deferring to help manage valuable items efficiently.
+An ExileCore2 plugin for automating ritual defers in Path of Exile 2.
 
 ## Features
 
-- **Automatic Item Deferring**: Automatically defer items based on configurable criteria
-- **Existing Items Management**: Option to defer items that are already deferred
-- **New Items Filtering**: Defer new items based on a customizable filter list
-- **Human-like Behavior**: Configurable delays to simulate natural mouse movements
-- **One-Click Operation**: Simple button interface for quick activation
-
-## Configuration
-
-The plugin provides several configuration options:
-
-- **Action Delay**: Delay between actions (50-1000ms) to simulate human behavior
-- **Random Delay**: Additional random delay (0-100ms) for more natural timing
-- **Cancel with Right Click**: Option to cancel operations with right mouse button
-- **Defer Settings**: Toggle deferring of existing items and new items separately
-- **Item Filter List**: Comma-separated list of item names/types to automatically defer
-
-## Default Filter List
-
-The plugin comes with a default filter for valuable items:
-- Perfect (items)
-- Divine Orb
-- Exalted Orb
-- Chaos Orb
-- Omen of (items)
-- 20 (quality items)
-- Petition Splinter
-
-## Usage
-
-1. Open a ritual window in Path of Exile 2
-2. Click the pick button that appears next to the defer/cancel buttons
-3. The plugin will automatically defer items based on your configuration
-
-## Installation
-
-1. Copy the plugin folder to your ExileCore2 plugins directory
-2. Restart ExileCore2
-3. Enable the plugin in the ExileCore2 settings
+- One-click ritual defer automation
+- Priority-based defer rules with minimum stack sizes
+- Optional handling for already deferred items
+- Optional auto confirm, auto pickup, and auto reroll
+- NinjaPricer-backed pricing for unlisted ritual items
+- Debug overlay for ritual item classification
 
 ## Requirements
 
 - Path of Exile 2
-- ExileCore2 framework
+- ExileCore2
+- NinjaPricer plugin
 - .NET 8.0
+
+`NinjaPricer` is required. RitualHelper reads prices through `PluginBridge` and does not have a standalone pricing backend.
+
+## Configuration
+
+- `Action Delay` and `Random Delay` control automation timing.
+- `Defer existing items` allows re-processing already deferred ritual entries.
+- `Category Filters` define which currency, ritual, and unique categories are eligible for NinjaPricer-based auto defer and what their minimum value in exalted orbs is.
+- Manual defer rules are always active. Auto-priced unlisted items are considered whenever at least one category filter is enabled.
+
+Manual defer rules are managed in the `Defer Items` section:
+
+- `Name` matches by substring against the resolved item name.
+- `Priority` controls click order, highest first.
+- `Min Stack Size` blocks deferring low stack counts.
+
+## Usage
+
+1. Open a ritual window.
+2. Click the button drawn next to the ritual reroll control.
+3. RitualHelper enters defer mode, applies matching manual rules, evaluates unlisted items against the enabled NinjaPricer category thresholds, and then runs any enabled follow-up actions.
+
+## Notes
+
+- Unidentified uniques are matched using local unique art mapping when possible.
+- If NinjaPricer bridge methods are unavailable, price-based auto defer is skipped.
 
 ## License
 
-This project is open source and available under the MIT License.
+MIT
